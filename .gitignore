@@ -65,3 +65,5 @@ rag_docs/
 # Root Temp / Doc Artifacts
 # ============================================================
 *.png
+*.md
+!README.md
