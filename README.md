@@ -1,32 +1,33 @@
 # ai-hiking
 
-ai-hiking 是一个面向徒步场景的本地 AI 助手应用。项目由 React 前端、Go API Gateway、Python FastAPI AI Service 组成，提供两类核心能力：
+ai-hiking 是一个本地优先的智能徒步助手。项目把 React 前端、Go API Gateway 和 Python FastAPI AI Service 组合在一起，面向徒步知识问答、路线规划、天气适宜性判断、装备建议和风险提醒等场景。
 
-- RAG 模块：上传或同步徒步资料后进行知识库问答，支持向量检索、BM25、实体召回、查询改写、Rerank 和检索调试信息。
-- Agent 模块：围绕徒步路线、天气适宜性、装备清单、风险提醒和报告导出进行行动式对话，使用 LangGraph ReAct、确定性徒步工作流、工具预算、SSE 流式输出和高风险工具确认。
+当前 main 分支包含两个主要体验：
 
-## 架构概览
+- **RAG 模块**：上传或同步徒步资料后进行知识库问答，支持向量检索、BM25 召回、实体信号、查询改写、可选 rerank 和检索调试信息。
+- **Agent 模块**：围绕徒步任务进行行动式对话，结合确定性徒步工作流、LangGraph ReAct fallback、工具风险分级、SSE 流式输出和会话记忆。
+
+## 架构
 
 ```text
 Browser
   |
   | HTTP / SSE
   v
-frontend/  React 18 + TypeScript + Vite + TailwindCSS
+frontend/   React 18 + TypeScript + Vite + TailwindCSS
   |
-  | /api/v1 proxy
+  | /api/v1/*
   v
-gateway/   Go 1.22 + Gin
+gateway/    Go 1.22 + Gin
   |
   | HTTP / SSE proxy
   v
 ai-service/ Python 3.12 + FastAPI + LangChain + LangGraph
   |
-  +-- Agent: intent intake, deterministic hiking workflows, ReAct fallback
-  +-- RAG: upload, split, hybrid retrieval, rerank, answer streaming
-  +-- Memory: chat history, session compression, vector knowledge memory
-  +-- MCP: AMap stdio MCP and optional image-search MCP
-  +-- Tools: web, file, download, terminal, PDF and hiking-domain adapters
+  +-- Agent: intent intake, hiking workflows, tool policy, memory commit
+  +-- RAG: document loading, query rewriting, hybrid retrieval, rerank
+  +-- Memory: chat history, session compression, extracted knowledge
+  +-- Tools: web, file, terminal, PDF, route, weather, risk, gear
   |
   +-- PostgreSQL + pgvector
   +-- Redis
@@ -34,43 +35,38 @@ ai-service/ Python 3.12 + FastAPI + LangChain + LangGraph
 
 默认端口：
 
-| 服务 | 地址 | 说明 |
+| Service | URL | Notes |
 |---|---|---|
-| Frontend | `http://localhost:5173` | Vite 开发服务器 |
-| Gateway | `http://localhost:8080` | 前端访问的统一 API 入口 |
-| AI Service | `http://localhost:8000` | FastAPI 服务与 OpenAPI 文档 |
-| PostgreSQL | `localhost:5432` | `docker-compose.yml` 中的 pgvector |
-| Redis | `localhost:5379` | 宿主机端口映射到容器 `6379` |
+| Frontend | `http://localhost:5173` | Vite dev server |
+| Gateway | `http://localhost:8080` | Frontend API entry |
+| AI Service | `http://localhost:8000` | FastAPI app and `/docs` |
+| PostgreSQL | `localhost:5432` | `pgvector/pgvector:pg16` |
+| Redis | `localhost:5379` | Host port mapped to container `6379` |
 
-## 快速开始
+## Tech Stack
 
-### 1. 准备环境
+- Frontend: React 18, TypeScript, Vite 5, TailwindCSS, React Router, lucide-react
+- Gateway: Go 1.22, Gin, CORS middleware, rate limiting
+- AI Service: Python 3.12, FastAPI, LangChain 0.3, LangGraph 0.2, OpenAI-compatible clients
+- Retrieval: PostgreSQL + pgvector, in-memory fallback, BM25, RRF, optional rerank
+- Runtime dependencies: Docker Compose, Redis, optional `lark-cli`, optional AMap API
 
-需要本机安装：
+## Quick Start
 
-- Python 3.12+
-- Node.js 18+，推荐 20 LTS
-- Go 1.22+
-- Docker Desktop / Docker Compose
-- 一个 OpenAI 兼容的大模型 API Key
-- 可选：高德地图 API Key，用于天气、地理反查和 POI 路线候选
-- 可选：Pexels API Key，用于内置图片搜索 MCP Server
-- 可选：`lark-cli`，用于飞书文档同步
-
-### 2. 启动 PostgreSQL 和 Redis
+### 1. Start infrastructure
 
 ```bash
 docker compose up -d
 ```
 
-容器名称：
+This starts:
 
 - `ai-hiking-postgres`
 - `ai-hiking-redis`
 
-### 3. 配置 AI Service 环境变量
+### 2. Configure AI Service
 
-在 `ai-service/.env` 中配置。该文件不应提交到仓库。
+Create `ai-service/.env`. The file is intentionally ignored by Git.
 
 ```env
 # LLM
@@ -78,14 +74,14 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=your-llm-api-key
 OPENAI_MODEL=deepseek-v4-flash
 
-# Embedding
+# Embeddings
 EMBEDDING_BASE_URL=https://api.openai.com/v1
 EMBEDDING_API_KEY=your-embedding-api-key
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSIONS=1536
 
-# Rerank, optional
-RERANK_BASE_URL=https://api.example.com/v1
+# Optional rerank
+RERANK_BASE_URL=https://api.openai.com/v1
 RERANK_API_KEY=your-rerank-api-key
 RERANK_MODEL=Qwen/Qwen3-Reranker-8B
 RERANK_ENABLED=true
@@ -96,32 +92,22 @@ REDIS_URL=redis://localhost:5379/0
 MEMORY_STORE_PATH=./memory_store
 MEMORY_ENABLED=true
 
-# AMap MCP, optional but recommended for hiking workflows
-AMAP_MAPS_API_KEY=your-amap-key
-# AMAP_API_KEY is still accepted for compatibility.
-# AMAP_MCP_COMMAND=npx
-# AMAP_MCP_ARGS=-y @amap/amap-maps-mcp-server
+# Optional hiking data providers
+AMAP_API_KEY=your-amap-key
 
-# Web search, optional
-BAIDU_SEARCH_API_KEY=your-baidu-search-key
-
-# Image search MCP, optional
-PEXELS_API_KEY=your-pexels-key
+# Optional Feishu sync defaults
+FEISHU_DEFAULT_SPACE_ID=
+FEISHU_DEFAULT_FOLDER_TOKEN=
 ```
 
-也可以在前端 `/llm-config` 页面填写大模型、Embedding 和 Rerank 配置。保存时前端会调用 `/api/v1/models/save-config`，由 AI Service 写入 `ai-service/.env`。
+Notes:
 
-### 4. 启动 AI Service
+- `config.py` defaults Redis to `localhost:6379`; when using this repository's `docker-compose.yml`, set `REDIS_URL=redis://localhost:5379/0`.
+- `/llm-config` stores model settings in browser localStorage and sends them with chat/RAG requests. It does not persist secrets to the repository.
 
-```bash
-cd ai-service
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
+### 3. Run AI Service
 
-Windows PowerShell：
+PowerShell:
 
 ```powershell
 cd ai-service
@@ -131,28 +117,32 @@ pip install -r requirements.txt
 python main.py
 ```
 
-如果本机已有项目内的本地 Conda 环境，也可以直接使用：
+Bash:
 
-```powershell
-ai-service\.conda312\python.exe ai-service\main.py
+```bash
+cd ai-service
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
 ```
 
-### 5. 启动 Gateway
+### 4. Run Gateway
 
 ```bash
 cd gateway
 go run main.go
 ```
 
-可用环境变量：
+Gateway environment variables:
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `PORT` | `8080` | Gateway 监听端口 |
-| `AI_SERVICE_URL` | `http://localhost:8000` | AI Service 地址 |
-| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | CORS 白名单 |
+| `PORT` | `8080` | Gateway listen port |
+| `AI_SERVICE_URL` | `http://localhost:8000` | Upstream AI Service URL |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | CORS allow list |
 
-### 6. 启动 Frontend
+### 5. Run Frontend
 
 ```bash
 cd frontend
@@ -160,51 +150,57 @@ npm install
 npm run dev
 ```
 
-访问 `http://localhost:5173`。
+Open `http://localhost:5173`.
 
-## 页面
+## Pages
 
-| 路由 | 页面 | 说明 |
+| Route | Page | Purpose |
 |---|---|---|
-| `/` | 首页 | 入口页，连接 RAG 和 Agent 两个模块 |
-| `/love-master` | RAG 模块 | 知识问答、文件上传、检索过程和检索调试 |
-| `/super-agent` | Agent 模块 | 徒步计划、天气适宜性、路线推荐、工具执行和确认 |
-| `/llm-config` | LLM 配置 | 配置 LLM、Embedding、Rerank，保存到浏览器和 `.env` |
+| `/` | Home | Entry page |
+| `/love-master` | RAG module | Knowledge-base Q&A and document upload |
+| `/super-agent` | Agent module | Hiking assistant chat and streamed tool execution |
+| `/llm-config` | LLM config | Browser-side model, embedding and rerank settings |
 
-## API
+## API Surface
 
-Gateway 对外暴露 `/api/v1/*`，并代理到 AI Service。
+The frontend calls the Gateway under `/api/v1/*`.
 
-| 方法 | 路径 | 说明 |
+| Method | Gateway path | Description |
 |---|---|---|
-| `GET` | `/health` | Gateway 健康检查 |
-| `GET` | `/api/v1/chat/health` | Agent 健康检查 |
-| `POST` | `/api/v1/chat/sync` | 同步 Agent 对话 |
-| `POST` | `/api/v1/chat/sse` | SSE Agent 对话 |
-| `GET` | `/api/v1/chat/history/:chatId` | 对话历史 |
-| `POST` | `/api/v1/chat/confirm` | 确认、拒绝或编辑高风险工具调用 |
-| `GET` | `/api/v1/chat/pending/:chatId` | 查询待确认工具调用 |
-| `GET` | `/api/v1/rag/health` | RAG 健康检查 |
-| `POST` | `/api/v1/rag/upload` | 上传 RAG 文档 |
-| `POST` | `/api/v1/rag/query` | SSE RAG 问答 |
-| `GET` | `/api/v1/rag/documents` | 已上传文档列表 |
-| `POST` | `/api/v1/rag/feishu/sync` | 同步单个飞书文档 |
-| `POST` | `/api/v1/rag/feishu/default-sync` | 从默认飞书空间或文件夹同步 |
-| `POST` | `/api/v1/models/fetch` | 从 OpenAI 兼容接口读取模型列表 |
-| `POST` | `/api/v1/models/save-config` | 保存模型配置到 `ai-service/.env` |
+| `GET` | `/health` | Gateway health check |
+| `GET` | `/api/v1/chat/health` | Agent health check |
+| `POST` | `/api/v1/chat/sync` | Synchronous Agent chat |
+| `POST` | `/api/v1/chat/sse` | Streaming Agent chat |
+| `GET` | `/api/v1/chat/history/:chatId` | Chat history |
+| `POST` | `/api/v1/models/fetch` | Fetch models from an OpenAI-compatible provider |
+| `GET` | `/api/v1/rag/health` | RAG health check |
+| `POST` | `/api/v1/rag/upload` | Upload a RAG document |
+| `POST` | `/api/v1/rag/query` | Streaming RAG answer |
+| `GET` | `/api/v1/rag/documents` | List uploaded documents |
+| `POST` | `/api/v1/rag/feishu/sync` | Sync a single Feishu document |
+| `POST` | `/api/v1/rag/feishu/default-sync` | Sync configured Feishu sources |
 
-AI Service 还直接暴露：
+AI Service also exposes direct endpoints:
 
-- `GET http://localhost:8000/health`
-- `GET http://localhost:8000/api/v1/tools`
-- `GET http://localhost:8000/api/v1/tools/health`
-- `GET http://localhost:8000/docs`
+| Method | AI Service path | Description |
+|---|---|---|
+| `GET` | `/health` | Service health check |
+| `GET` | `/docs` | FastAPI OpenAPI UI |
+| `GET` | `/api/v1/tools` | Tool registry metadata |
+| `GET` | `/api/v1/tools/health` | Tool configuration and external key status |
+| `POST` | `/api/v1/chat/confirm` | Resolve a high-risk tool confirmation |
+| `GET` | `/api/v1/chat/pending/{chat_id}` | List pending tool confirmations |
 
-## Agent 模块
+## Agent Module
 
-Agent 入口位于 `ai-service/agent/agent.py`，请求理解位于 `ai-service/agent/intake.py`。
+Core files:
 
-当前支持的意图：
+- `ai-service/agent/intake.py`: deterministic intent detection, slot extraction and current-location normalization
+- `ai-service/agent/agent.py`: LangGraph ReAct wrapper, tool selection, SSE events and memory commit
+- `ai-service/tools/hiking_domain.py`: weather, geo, route, gear, risk and report adapters
+- `ai-service/api/chat.py`: sync and SSE chat endpoints
+
+Supported high-level intents:
 
 - `general_chat`
 - `knowledge_qa`
@@ -213,173 +209,117 @@ Agent 入口位于 `ai-service/agent/agent.py`，请求理解位于 `ai-service/
 - `risk_assessment`
 - `report_export`
 
-执行路径：
+Execution flow:
 
-1. `understand_request()` 先做确定性意图识别、槽位提取和当前位置归一化。
-2. `HikingWorkflowRunner` 优先处理可确定完成的徒步工作流，例如天气适宜性和路线推荐。
-3. 若工作流不能直接回答，则构建 Agent runtime policy，限制工具集合、工具预算和最大步骤数。
-4. ReAct fallback 使用 LangGraph 和 OpenAI 兼容模型生成最终回答。
-5. SSE 事件返回 `thought`、`tool_call`、`tool_result`、`approval_required`、`artifact`、`text`、`done`、`error` 等类型。
+1. The request is normalized with `understand_request()`.
+2. Current-location weather and route flows are prefetched deterministically when possible.
+3. The Agent exposes only a small intent-specific tool set for the current turn.
+4. LangGraph ReAct handles fallback reasoning with `MAX_STEPS = 6`.
+5. SSE emits `thought`, `tool_call`, `tool_result`, `approval_required`, `artifact`, `text`, `done` and `error` events.
+6. Conversation memory is committed only after a final assistant response is produced.
 
-模型可见工具是 reference-style 的 8 个工具：
+Visible base tools:
 
-| 工具 | 说明 |
-|---|---|
-| `searchWeb` | 搜索公开网页信息 |
-| `scrapeWebPage` | 读取指定 URL 内容 |
-| `readFile` | 读取工作区文件 |
-| `writeFile` | 写入工作区文件，高风险工具，执行前需要确认 |
-| `downloadResource` | 下载资源 |
-| `executeTerminalCommand` | 执行终端命令，关键风险工具 |
-| `generatePDF` | 生成 PDF |
-| `doTerminate` | Agent 内部终止控制 |
+- `web_search`
+- `web_scraping`
+- `file_operation`
+- `resource_download`
+- `terminal`
+- `generate_pdf`
+- `terminate`
 
-徒步领域能力不直接作为模型可见工具暴露，而是由内部适配器和确定性工作流使用：
+Hidden hiking-domain tools:
 
-- `geo_lookup`
 - `weather_lookup`
+- `geo_lookup`
 - `route_research`
+- `hiking_knowledge_search`
 - `gear_checklist`
 - `risk_assessment`
 - `trip_report_export`
-- `hiking_knowledge_search`
 
-## RAG 模块
+## RAG Module
 
-RAG 入口位于 `ai-service/api/rag.py`，核心组件位于 `ai-service/rag/`。
+Core files:
 
-文档处理：
+- `ai-service/api/rag.py`: upload, query, document list and Feishu sync endpoints
+- `ai-service/rag/loader.py`: file loading and chunking
+- `ai-service/rag/retriever.py`: pgvector/in-memory retrieval, BM25 and hybrid search
+- `ai-service/rag/rewriter.py`: query rewriting and multi-query expansion
+- `ai-service/rag/reranker.py`: optional rerank stage
+- `ai-service/rag/augmenter.py`: context construction for final answers
 
-- 后端支持 `.txt`、`.md`、`.pdf`、`.docx`
-- 上传文件保存到 `rag_docs/`
-- 文本先归一化、降噪、切块，再写入检索存储
-- 文档元数据会附带 source、title、doc_type、chunk 信息和实体抽取结果
+Supported upload formats:
 
-检索路径：
+- `.txt`
+- `.md`
+- `.pdf`
+- `.docx`
 
-1. QueryRewriter 对问题进行改写和多查询拓展。
-2. VectorStoreRetriever 优先连接 PostgreSQL/pgvector，失败时降级到内存存储。
-3. 对每个查询执行 semantic、BM25 keyword、entity 三路召回。
-4. 使用 RRF 融合候选结果。
-5. Reranker 可选开启，用于重排候选片段。
-6. ContextAugmenter 将检索上下文注入最终回答。
+Retrieval flow:
 
-过滤约定：
+1. Normalize and rewrite the user query.
+2. Retrieve candidates through vector search and BM25 lexical search.
+3. Fuse ranked lists with reciprocal rank fusion.
+4. Optionally rerank top candidates.
+5. Stream final answer events back to the frontend.
 
-- 推荐使用 `filters.status`，例如 `{"filters": {"status": "feishu"}}`
-- 旧字段 `status` 会归一化并返回诊断信息
-- `user_id`、`agent_id`、`scope` 不是 RAG 查询支持的 top-level filter，会返回明确错误
-
-前端会在折叠面板中展示隐私安全的检索调试信息，例如：
-
-- 查询数和候选 chunk 数
-- 存储后端：`pgvector` 或 `memory`
-- source/signal/entity 命中计数
-- 过滤器诊断
+If pgvector is unavailable, the retriever falls back to memory mode. Memory mode is useful for local development but uploaded documents are not durable across process restarts.
 
 ## Memory
 
-记忆相关代码位于 `ai-service/memory/`。
+Memory code lives in `ai-service/memory/`.
 
-当前实现包括：
+Current pieces:
 
-- `FileChatMemory`：按 `chat_id` 保存对话历史。
-- `SessionCompressor`：压缩短期会话上下文。
-- `KnowledgeExtractor`：从对话中抽取长期知识项。
-- `VectorStore`：使用 FAISS 或内存 fallback 保存长期知识向量。
-- `MemoryCommitter`：只在回答完成后提交稳定偏好或行程相关记忆。
+- `FileChatMemory`: per-chat message history
+- `SessionCompressor`: short-term session compression
+- `KnowledgeExtractor`: extracts durable user/task facts
+- `VectorStore`: FAISS or in-memory vector storage
+- `MemoryCommitter`: commits stable memory after completed answers
 
-长期记忆写入采用保守去重策略：
+The memory layer is conservative: exact duplicates are skipped, approximate duplicates are marked as merge candidates, and existing memory is not silently overwritten.
 
-- 同 scope/user/agent/type/subject/predicate/object 的精确重复会跳过。
-- 近似重复只标记为 `merge_candidate`，不会删除或覆盖已有记忆。
-- 写入报告包含 `dedupe_skip_count`、`outcome_status_counts` 等观测字段。
-
-## MCP
-
-### AMap MCP
-
-当 `AMAP_MAPS_API_KEY` 或兼容变量 `AMAP_API_KEY` 存在时，AI Service 会配置官方高德 MCP：
-
-```text
-npx -y @amap/amap-maps-mcp-server
-```
-
-相关代码：
-
-- `ai-service/mcp/client.py`
-- `ai-service/mcp/amap.py`
-- `ai-service/tools/hiking_domain.py`
-
-Windows 下 `.cmd` / `.bat` 启动由 MCP client 包装处理。
-
-### Image Search MCP
-
-项目内置一个可选图片搜索 MCP Server：
-
-```bash
-cd mcp-server/image_search
-pip install -r requirements.txt
-set PEXELS_API_KEY=your-pexels-key
-python server.py --transport stdio
-```
-
-SSE 模式：
-
-```bash
-python server.py --transport sse --port 8100
-```
-
-AI Service 检测到 `PEXELS_API_KEY` 后会使用默认的内置 server 路径启动该 MCP。通常只需要配置：
-
-```env
-PEXELS_API_KEY=your-pexels-key
-```
-
-## 目录结构
+## Project Layout
 
 ```text
 ai-hiking/
 ├── ai-service/
-│   ├── main.py                 # FastAPI 入口
-│   ├── config.py               # 环境变量配置
-│   ├── api/                    # chat, rag, models, tools 路由
-│   ├── agent/                  # LangGraph Agent、工作流、策略、性能指标
-│   ├── rag/                    # 文档加载、检索、改写、重排、增强
-│   ├── memory/                 # 对话历史、压缩、知识抽取、向量记忆
-│   ├── mcp/                    # MCP stdio client 和 AMap 适配
-│   └── tools/                  # Agent 工具与徒步领域工具
+│   ├── main.py
+│   ├── config.py
+│   ├── api/
+│   ├── agent/
+│   ├── rag/
+│   ├── memory/
+│   ├── mcp/
+│   ├── tools/
+│   └── tests/
 ├── frontend/
-│   ├── src/App.tsx             # 路由和主布局
-│   ├── src/pages/              # Home, LoveMaster, SuperAgent, LlmConfig
-│   ├── src/api/                # SSE、RAG、LLM 配置 API 客户端
-│   └── src/components/         # 聊天、状态、记忆计量等组件
+│   ├── src/
+│   ├── tests/
+│   ├── package.json
+│   └── vite.config.ts
 ├── gateway/
-│   ├── main.go                 # Gin 入口和路由注册
-│   ├── config/                 # Gateway 环境变量
-│   ├── handler/                # chat, rag, models, health 代理
-│   └── middleware/             # CORS 和限流
-├── mcp-server/image_search/    # Pexels 图片搜索 MCP Server
-├── docker-compose.yml          # PostgreSQL/pgvector 与 Redis
-├── MEMORY.md                   # 项目长期记忆
-├── progress.md                 # Agent 会话进度
-└── verify.json                 # Agent 验证记录
+│   ├── main.go
+│   ├── config/
+│   ├── handler/
+│   └── middleware/
+├── mcp-server/image_search/
+├── docker-compose.yml
+└── README.md
 ```
 
-运行时生成目录通常会被 `.gitignore` 忽略：
+Runtime and generated files are ignored, including:
 
 - `ai-service/.env`
-- `memory_store/`
-- `rag_docs/`
-- `workspace/`
-- `repo-context.md`
-- `frontend/dist/`
-- `node_modules/`
-- `.venv/`、`.conda*/`
+- `.venv/`, `.conda*/`, `__pycache__/`
+- `node_modules/`, `frontend/dist/`
+- `memory_store/`, `memory_data/`, `rag_docs/`, `workspace/`
+- generated Markdown documents other than `README.md`
 
-## 常用命令
+## Common Commands
 
-基础设施：
+Infrastructure:
 
 ```bash
 docker compose up -d
@@ -387,16 +327,17 @@ docker compose ps
 docker compose down
 ```
 
-AI Service：
+AI Service:
 
 ```bash
 cd ai-service
 pip install -r requirements.txt
 python main.py
-python -m compileall -q agent api mcp memory rag tools main.py config.py
+python -m compileall -q agent api memory mcp rag tools main.py config.py
+python -m pytest tests -q
 ```
 
-Gateway：
+Gateway:
 
 ```bash
 cd gateway
@@ -404,7 +345,7 @@ go run main.go
 go test ./...
 ```
 
-Frontend：
+Frontend:
 
 ```bash
 cd frontend
@@ -414,9 +355,7 @@ npm run build
 npm test
 ```
 
-当前 `frontend/package.json` 的测试脚本是 `node --test tests/*.test.mjs`。如果当前工作副本没有 `frontend/tests/*.test.mjs`，该命令不会有可运行的前端测试文件。
-
-## 健康检查
+## Health Checks
 
 ```bash
 curl http://localhost:8000/health
@@ -424,57 +363,44 @@ curl http://localhost:8000/api/v1/chat/health
 curl http://localhost:8000/api/v1/rag/health
 curl http://localhost:8000/api/v1/tools/health
 curl http://localhost:8080/health
-```
-
-前端本地检查：
-
-```bash
 curl http://localhost:5173/
-curl http://localhost:5173/super-agent
-curl http://localhost:5173/love-master
 ```
 
-## 常见问题
+## Troubleshooting
 
-### Agent 返回“主模型未配置 API Key”
+### Agent reports missing API key
 
-处理方式：
+Set `OPENAI_API_KEY` in `ai-service/.env`, or configure LLM settings in `/llm-config` before sending requests from the frontend.
 
-- 在 `/llm-config` 页面保存 LLM 配置。
-- 或在 `ai-service/.env` 中设置 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。
+### RAG has no retrieval results
 
-### RAG 没有检索结果
+Check:
 
-先检查：
+- `EMBEDDING_API_KEY` is configured.
+- PostgreSQL is running on `localhost:5432`.
+- `DATABASE_URL` points to the Docker database.
+- Documents have been uploaded through `/love-master`.
 
-- `EMBEDDING_API_KEY` 是否可用。
-- PostgreSQL 是否启动。
-- `DATABASE_URL` 是否指向 `localhost:5432`。
-- 是否已经通过 `/love-master` 上传文档。
+### Redis connection fails
 
-如果 pgvector 不可用，系统会降级到内存存储，但重启后内存中的 RAG 文档不会保留。
-
-### Redis 连接失败
-
-`docker-compose.yml` 将 Redis 容器端口 `6379` 映射到宿主机 `5379`。本地运行 AI Service 时建议设置：
+When using the repository Docker setup, set:
 
 ```env
 REDIS_URL=redis://localhost:5379/0
 ```
 
-### AMap MCP 不可用
+### Weather or location tools return placeholder data
 
-先确认：
+Set:
 
-- `AMAP_MAPS_API_KEY` 已设置。
-- Node.js 和 `npx` 可用。
-- `npx -y @amap/amap-maps-mcp-server` 能正常启动。
-- `/api/v1/tools/health` 中的 MCP 配置状态符合预期。
+```env
+AMAP_API_KEY=your-amap-key
+```
 
-### 飞书同步不可用
+### Feishu sync is disabled
 
-飞书同步依赖 `lark-cli`。如果 `lark-cli` 不在 PATH 中，`settings.feishu_enabled` 会返回 false，相关接口会提示未启用。
+Feishu sync depends on `lark-cli` being available in `PATH`. Optional defaults can be configured with `FEISHU_DEFAULT_SPACE_ID` and `FEISHU_DEFAULT_FOLDER_TOKEN`.
 
-## 许可
+## License
 
-当前仓库未包含独立的 `LICENSE` 文件。
+No standalone `LICENSE` file is currently included.
