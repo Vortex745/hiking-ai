@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${IMAGE_PREFIX:-ghcr.io/vortex745/hiking-ai}-pgvector:pg16
     container_name: ai-hiking-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_hiking}
@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: ${IMAGE_PREFIX:-ghcr.io/vortex745/hiking-ai}-redis:7-alpine
     container_name: ai-hiking-redis
     volumes:
       - redis-data:/data

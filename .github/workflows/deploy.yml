@@ -135,11 +135,46 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+  mirror-runtime-images:
+    name: Mirror runtime image ${{ matrix.name }}
+    needs:
+      - meta
+      - validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: redis
+            source: redis:7-alpine
+            target: redis:7-alpine
+          - name: pgvector
+            source: pgvector/pgvector:pg16
+            target: pgvector:pg16
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror image to GHCR
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_image='${{ matrix.source }}'
+          target_image='${{ needs.meta.outputs.image_prefix }}-${{ matrix.target }}'
+          docker pull "$source_image"
+          docker tag "$source_image" "$target_image"
+          docker push "$target_image"
+
   deploy:
     name: Deploy to server
     needs:
       - meta
       - build
+      - mirror-runtime-images
     runs-on: ubuntu-latest
     environment: production
     steps:
