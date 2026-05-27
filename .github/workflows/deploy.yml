@@ -8,10 +8,9 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
-  REGISTRY: ghcr.io
+  DOCKERHUB_IMAGE: zijinn123/ai-hiking
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -22,16 +21,15 @@ jobs:
     name: Prepare image metadata
     runs-on: ubuntu-latest
     outputs:
-      image_prefix: ${{ steps.vars.outputs.image_prefix }}
+      image_repository: ${{ steps.vars.outputs.image_repository }}
       short_sha: ${{ steps.vars.outputs.short_sha }}
     steps:
-      - name: Compute lowercase image prefix
+      - name: Compute image metadata
         id: vars
         shell: bash
         run: |
           set -euo pipefail
-          repo="${GITHUB_REPOSITORY,,}"
-          echo "image_prefix=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
+          echo "image_repository=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
   validate:
@@ -77,7 +75,7 @@ jobs:
 
       - name: Validate compose files
         run: |
-          IMAGE_PREFIX=${{ needs.meta.outputs.image_prefix || 'ghcr.io/vortex745/hiking-ai' }} IMAGE_TAG=latest docker compose -f docker-compose.prod.yml config --quiet
+          DOCKERHUB_IMAGE=${{ needs.meta.outputs.image_repository || 'zijinn123/ai-hiking' }} IMAGE_TAG=latest docker compose -f docker-compose.prod.yml config --quiet
 
   build:
     name: Build and push ${{ matrix.service }}
@@ -102,12 +100,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -116,10 +113,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ needs.meta.outputs.image_prefix }}-${{ matrix.service }}
+          images: ${{ needs.meta.outputs.image_repository }}
           tags: |
-            type=raw,value=sha-${{ needs.meta.outputs.short_sha }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ matrix.service }}-sha-${{ needs.meta.outputs.short_sha }}
+            type=raw,value=${{ matrix.service }}-latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -135,8 +132,8 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  mirror-runtime-images:
-    name: Mirror runtime image ${{ matrix.name }}
+  publish-runtime-images:
+    name: Publish runtime image ${{ matrix.name }}
     needs:
       - meta
       - validate
@@ -147,24 +144,23 @@ jobs:
         include:
           - name: redis
             source: redis:7-alpine
-            target: redis:7-alpine
+            target: runtime-redis-7-alpine
           - name: pgvector
             source: pgvector/pgvector:pg16
-            target: pgvector:pg16
+            target: runtime-pgvector-pg16
     steps:
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Mirror image to GHCR
+      - name: Publish image to Docker Hub
         shell: bash
         run: |
           set -euo pipefail
           source_image='${{ matrix.source }}'
-          target_image='${{ needs.meta.outputs.image_prefix }}-${{ matrix.target }}'
+          target_image='${{ needs.meta.outputs.image_repository }}:${{ matrix.target }}'
           docker pull "$source_image"
           docker tag "$source_image" "$target_image"
           docker push "$target_image"
@@ -174,7 +170,7 @@ jobs:
     needs:
       - meta
       - build
-      - mirror-runtime-images
+      - publish-runtime-images
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -199,6 +195,36 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "$remote" "mkdir -p '${{ secrets.DEPLOY_PATH }}'"
           scp -i ~/.ssh/deploy_key -P "${{ secrets.DEPLOY_PORT }}" docker-compose.prod.yml "$remote:${{ secrets.DEPLOY_PATH }}/docker-compose.prod.yml"
 
+      - name: Upload production environment
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+          RERANK_API_KEY: ${{ secrets.RERANK_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"
+          test -n "$EMBEDDING_API_KEY"
+          test -n "$RERANK_API_KEY"
+          cat > .env.production <<ENV
+          OPENAI_BASE_URL=https://api.deepseek.com/v1
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          OPENAI_MODEL=deepseek-v4-flash
+          EMBEDDING_BASE_URL=https://api.edgefn.net/v1
+          EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+          EMBEDDING_MODEL=BAAI/bge-m3
+          EMBEDDING_DIMENSIONS=1024
+          RERANK_BASE_URL=https://api.edgefn.net/v1
+          RERANK_API_KEY=${RERANK_API_KEY}
+          RERANK_MODEL=bge-reranker-v2-m3
+          RERANK_ENABLED=true
+          ENV
+          chmod 600 .env.production
+          remote="${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.DEPLOY_PORT }}" .env.production "$remote:${{ secrets.DEPLOY_PATH }}/.env"
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "$remote" "chmod 600 '${{ secrets.DEPLOY_PATH }}/.env'"
+          rm -f .env.production
+
       - name: Pull images and restart services
         shell: bash
         run: |
@@ -207,9 +233,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "$remote" <<'REMOTE'
             set -euo pipefail
             cd '${{ secrets.DEPLOY_PATH }}'
-            printf '%s' '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml pull
-            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml ps
-            docker logout ghcr.io || true
+            DOCKERHUB_IMAGE='${{ needs.meta.outputs.image_repository }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml pull
+            DOCKERHUB_IMAGE='${{ needs.meta.outputs.image_repository }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            DOCKERHUB_IMAGE='${{ needs.meta.outputs.image_repository }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml ps
           REMOTE
