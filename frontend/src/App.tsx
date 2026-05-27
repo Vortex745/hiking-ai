@@ -4,6 +4,7 @@ import {
   Home,
   Search,
   Bot,
+  Settings,
 } from 'lucide-react'
 import HomePage from './pages/Home'
 import LoveMaster from './pages/LoveMaster'
@@ -64,6 +65,17 @@ function App() {
           >
             <Bot className="w-[18px] h-[18px]" strokeWidth={2} />
             <span>Agent 模块</span>
+          </NavLink>
+          <NavLink
+            to="/llm-config"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-5 py-3 mx-3 rounded-sm text-sm transition-all ${
+                isActive ? 'bg-white/15 text-white' : 'text-white/70 hover:bg-white/[0.08] hover:text-white'
+              }`
+            }
+          >
+            <Settings className="w-[18px] h-[18px]" strokeWidth={2} />
+            <span>LLM 配置</span>
           </NavLink>
         </nav>
         {/* Forest Decoration */}

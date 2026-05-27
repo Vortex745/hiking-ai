@@ -294,7 +294,7 @@ test('measures model latency through the existing models fetch endpoint', async 
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, '/api/v1/models/fetch')
+  assert.equal(calls[0].input, 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1/models/fetch')
   assert.equal(measurement.latencyMs, 148)
   assert.equal(measurement.modelCount, 2)
   assert.equal(JSON.parse(calls[0].init.body).base_url, 'https://api.example.com/v1')

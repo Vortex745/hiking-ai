@@ -1,0 +1,180 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: Prepare image metadata
+    runs-on: ubuntu-latest
+    outputs:
+      image_prefix: ${{ steps.vars.outputs.image_prefix }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+    steps:
+      - name: Compute lowercase image prefix
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "image_prefix=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Validate services
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      - name: Validate gateway
+        working-directory: gateway
+        run: go test ./...
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate AI service syntax
+        working-directory: ai-service
+        run: python -m compileall -q .
+
+      - name: Validate compose files
+        run: |
+          IMAGE_PREFIX=${{ needs.meta.outputs.image_prefix || 'ghcr.io/vortex745/hiking-ai' }} IMAGE_TAG=latest docker compose -f docker-compose.prod.yml config --quiet
+
+  build:
+    name: Build and push ${{ matrix.service }}
+    needs:
+      - meta
+      - validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: ai-service
+            context: ./ai-service
+            dockerfile: ./ai-service/Dockerfile
+          - service: gateway
+            context: ./gateway
+            dockerfile: ./gateway/Dockerfile
+          - service: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.meta.outputs.image_prefix }}-${{ matrix.service }}
+          tags: |
+            type=raw,value=sha-${{ needs.meta.outputs.short_sha }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to server
+    needs:
+      - meta
+      - build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload production compose file
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "$remote" "mkdir -p '${{ secrets.DEPLOY_PATH }}'"
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.DEPLOY_PORT }}" docker-compose.prod.yml "$remote:${{ secrets.DEPLOY_PATH }}/docker-compose.prod.yml"
+
+      - name: Pull images and restart services
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "$remote" <<'REMOTE'
+            set -euo pipefail
+            cd '${{ secrets.DEPLOY_PATH }}'
+            printf '%s' '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml pull
+            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            IMAGE_PREFIX='${{ needs.meta.outputs.image_prefix }}' IMAGE_TAG='sha-${{ needs.meta.outputs.short_sha }}' docker compose -f docker-compose.prod.yml ps
+            docker logout ghcr.io || true
+          REMOTE

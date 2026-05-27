@@ -1,4 +1,4 @@
-const API_BASE = '/api/v1'
+const API_BASE = 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1'
 
 export const API = {
   chatSSE: `${API_BASE}/chat/sse`,

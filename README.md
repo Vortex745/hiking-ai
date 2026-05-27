@@ -401,6 +401,104 @@ AMAP_API_KEY=your-amap-key
 
 Feishu sync depends on `lark-cli` being available in `PATH`. Optional defaults can be configured with `FEISHU_DEFAULT_SPACE_ID` and `FEISHU_DEFAULT_FOLDER_TOKEN`.
 
+## Deployment
+
+### GitHub Actions + GHCR + Docker Compose
+
+The repository includes a GitHub Actions deployment pipeline in `.github/workflows/deploy.yml`.
+
+On every push to `main`, or on manual `workflow_dispatch`, the workflow:
+
+1. Validates the frontend, gateway, AI service syntax and production Compose file.
+2. Builds three Docker images with Buildx.
+3. Pushes the images to GitHub Container Registry:
+   - `ghcr.io/vortex745/hiking-ai-ai-service`
+   - `ghcr.io/vortex745/hiking-ai-gateway`
+   - `ghcr.io/vortex745/hiking-ai-frontend`
+4. Uploads `docker-compose.prod.yml` to the server over SSH.
+5. Pulls the commit-tagged images and restarts services with Docker Compose.
+
+Required GitHub repository secrets:
+
+| Secret | Description |
+|---|---|
+| `DEPLOY_HOST` | Server hostname or IP |
+| `DEPLOY_USER` | SSH user on the server |
+| `DEPLOY_SSH_KEY` | Private SSH key with access to the server |
+| `DEPLOY_PORT` | SSH port, usually `22` |
+| `DEPLOY_PATH` | Server directory for the production compose file and `.env` |
+
+Server requirements:
+
+- Docker Engine and Docker Compose plugin installed.
+- The `DEPLOY_USER` can run Docker commands.
+- A production `.env` exists in `DEPLOY_PATH`; keep secrets on the server, not in Git.
+- If GHCR packages are private, the workflow logs in during deployment with the repository `GITHUB_TOKEN`.
+
+Production deploy files:
+
+- `docker-compose.prod.yml` pulls GHCR images instead of building locally.
+- Only the frontend port is published by default through `FRONTEND_PORT`.
+- Gateway, AI Service, PostgreSQL and Redis stay on the private Docker network.
+- Runtime data is stored in Docker volumes: `pgdata`, `redis-data`, `ai-memory`, `ai-rag-docs`, and `ai-workspace`.
+
+Manual server smoke check after deployment:
+
+```bash
+cd /path/to/deploy
+docker compose -f docker-compose.prod.yml ps
+curl http://localhost:${FRONTEND_PORT:-3000}/
+```
+
+### CloudBase
+
+项目已部署到腾讯云 CloudBase：
+
+| 服务 | 类型 | URL |
+|------|------|-----|
+| **前端** | 静态托管 | `https://ai-hiking-d4gf29b4zcebc048d-1364947792.tcloudbaseapp.com/` |
+| **网关 (Gateway)** | CloudRun | `https://gateway-262534-6-1364947792.sh.run.tcloudbase.com` |
+| **AI 服务** | CloudRun | `https://ai-service-262534-6-1364947792.sh.run.tcloudbase.com` |
+
+### 环境信息
+
+- **EnvId**: `ai-hiking-d4gf29b4zcebc048d`
+- **地域**: 上海 (ap-shanghai)
+- **套餐**: 体验版
+
+### Frontend 静态托管
+
+前端使用 `@cloudbase/js-sdk` 的 `uploadFiles` 工具部署。API 调用通过网关公网 URL 直接跨域请求：
+
+```typescript
+const API_BASE = 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1'
+```
+
+### Gateway CloudRun
+
+- 语言: Go 1.22 + Gin
+- 访问类型: PUBLIC
+- 端口: 8080
+- 资源: 0.25 CPU / 0.5GB MEM
+- 环境变量:
+  - `AI_SERVICE_URL`: `https://ai-service-262534-6-1364947792.sh.run.tcloudbase.com`
+  - `ALLOWED_ORIGINS`: 包含静态托管域和 CloudRun 域
+
+### AI Service CloudRun
+
+- 语言: Python 3.12 + FastAPI
+- 访问类型: PUBLIC
+- 端口: 8000
+- 资源: 1 CPU / 2GB MEM
+- 状态: 运行中（内存模式，无 PostgreSQL/Redis）
+- 功能端点: `/health`、`/api/v1/chat/*`、`/api/v1/rag/*`、`/api/v1/models/*`
+
+### CloudBase 资源
+
+- 静态托管: 用于前端部署
+- CloudRun x3: frontend, gateway, ai-service
+- NoSQL 数据库: 已启用
+
 ## License
 
 No standalone `LICENSE` file is currently included.
