@@ -45,6 +45,8 @@ _META_SENTENCE_RE = re.compile(
     r"(?:说明|显示|提到|指出|可知|来看)[^。！？\n]*[。！？]?"
 )
 _SENTENCE_RE = re.compile(r"[^。！？!?]+[。！？!?]?")
+_NUMBERED_LINE_RE = re.compile(r"^\s*\d+(?:[)、]\s*|\.(?:\s+|(?=[^\d\s])))")
+_LEADING_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+(?:[)、]\s*|\.(?:\s+|(?=[^\d\s]))))")
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LATIN_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,}")
@@ -166,7 +168,11 @@ def _split_answer_sentences(text: str) -> list[str]:
 
 def _has_numbered_lines(text: str) -> bool:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return len(lines) >= 2 and all(re.match(r"^\d+[.)、]\s*", line) for line in lines[:2])
+    return sum(1 for line in lines if _NUMBERED_LINE_RE.match(line)) >= 2
+
+
+def _strip_leading_list_marker(text: str) -> str:
+    return _LEADING_LIST_MARKER_RE.sub("", text).strip()
 
 
 def _format_answer_text(text: str) -> str:
@@ -181,7 +187,9 @@ def _format_answer_text(text: str) -> str:
     normalized = " ".join(cleaned.split())
     sentences = _split_answer_sentences(normalized)
     if len(sentences) >= 3 or (len(normalized) >= 90 and len(sentences) >= 2):
-        return "\n".join(f"{idx}. {sentence}" for idx, sentence in enumerate(sentences, start=1))
+        points = [_strip_leading_list_marker(sentence) for sentence in sentences]
+        points = [point for point in points if point]
+        return "\n".join(f"{idx}. {sentence}" for idx, sentence in enumerate(points, start=1))
 
     return normalized
 

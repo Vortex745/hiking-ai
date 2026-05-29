@@ -13,6 +13,8 @@ from rag.text_processing import bm25_rank, reciprocal_rank_fusion
 
 logger = logging.getLogger("ai-service.rag")
 
+_SHARED_FALLBACK_DOCS: list[Document] = []
+
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
@@ -174,7 +176,7 @@ class VectorStoreRetriever:
         self._store: InMemoryVectorStore | None = None
         self._pg_client: _PGVectorClient | None = None
         self._fallback_mode = True
-        self._fallback_docs: list[Document] = []
+        self._fallback_docs: list[Document] = _SHARED_FALLBACK_DOCS
 
         if self.embedding_api_key:
             self.embeddings = OpenAIEmbeddings(
@@ -239,9 +241,6 @@ class VectorStoreRetriever:
                 self._store.add_documents(docs)
             except Exception as e:
                 logger.warning("InMemoryVectorStore add failed: %s", e)
-                if not hasattr(self, '_fallback_docs'):
-                    self._fallback_docs = []
-                self._fallback_docs.extend(docs)
 
     def similarity_search(self, query: str, k: int = 4, status_filter: Optional[str] = None) -> list[Document]:
         """Search for similar documents."""

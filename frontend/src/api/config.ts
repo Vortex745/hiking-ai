@@ -1,4 +1,8 @@
-const API_BASE = 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1'
+const isDev = import.meta.env?.DEV ?? false
+
+const API_BASE = isDev
+  ? '/api/v1'
+  : 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1'
 
 export const API = {
   chatSSE: `${API_BASE}/chat/sse`,

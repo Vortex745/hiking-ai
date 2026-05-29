@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@700;900&display=swap');
+
 :root {
   --primary: #1a3c2a;
   --primary-light: #2d6a4f;
@@ -13,6 +15,7 @@
   --text-muted: #999999;
   --border-color: #e8e8e3;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
 
   /* transitions-dev — copy this :root block into your project once.
@@ -58,10 +61,9 @@
   --modal-scale-close: 0.96;
   --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* Panel reveal */
-  --panel-open-dur: 400ms;
-  --panel-close-dur: 350ms;
-  --panel-translate-y: 100px;
-  --panel-blur: 2px;
+  --panel-open-dur: 240ms;
+  --panel-close-dur: 160ms;
+  --panel-translate-y: 18px;
   --panel-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* Page side-by-side */
   --page-slide-dur: 200ms;
@@ -76,7 +78,7 @@
   --icon-swap-dur: 200ms;
   --icon-swap-blur: 2px;
   --icon-swap-start-scale: 0.25;
-  --icon-swap-ease: ease-in-out;
+  --icon-swap-ease: var(--ease-in-out);
 }
 
 @layer base {
@@ -143,44 +145,23 @@
 
 @keyframes bounce {
   0%, 80%, 100% {
-    transform: scale(0);
+    opacity: 0.32;
+    transform: scale(0.72);
   }
   40% {
+    opacity: 1;
     transform: scale(1);
   }
 }
 
 @keyframes thinkingPulse {
   0%, 100% {
-    opacity: 0.34;
-    transform: translateY(2px) scale(0.72);
-  }
-  45% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes thinkingTrace {
-  0% {
-    transform: translateX(-100%) scaleX(0.35);
-    opacity: 0;
-  }
-  35% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateX(130%) scaleX(0.8);
-    opacity: 0;
-  }
-}
-
-@keyframes thinkingLabel {
-  0%, 100% {
-    opacity: 0.62;
+    opacity: 0.3;
+    transform: scale(0.8);
   }
   50% {
     opacity: 1;
+    transform: scale(1.1);
   }
 }
 
@@ -200,7 +181,7 @@
   height: 6px;
   border-radius: 9999px;
   background: var(--text-muted);
-  animation: bounce 1.4s ease-in-out infinite both;
+  animation: bounce 1.2s var(--ease-in-out) infinite both;
 }
 
 .loading-dots span:nth-child(1) {
@@ -214,10 +195,9 @@
 .ai-thinking {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  min-width: 128px;
-  min-height: 22px;
-  color: var(--primary-light);
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-secondary);
 }
 
 .ai-thinking-core {
@@ -227,47 +207,51 @@
 }
 
 .ai-thinking-core span {
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   border-radius: 9999px;
   background: currentColor;
-  animation: thinkingPulse 1.2s var(--ease-out) infinite;
+  animation: thinkingPulse 1.4s ease-in-out infinite;
   will-change: transform, opacity;
 }
 
 .ai-thinking-core span:nth-child(2) {
-  animation-delay: 120ms;
+  animation-delay: 160ms;
 }
 
 .ai-thinking-core span:nth-child(3) {
-  animation-delay: 240ms;
+  animation-delay: 320ms;
 }
 
 .ai-thinking-line {
-  position: relative;
-  width: 42px;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 9999px;
-  background: color-mix(in srgb, var(--primary-light) 14%, transparent);
-}
-
-.ai-thinking-line::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, currentColor, transparent);
-  transform-origin: left center;
-  animation: thinkingTrace 1.25s var(--ease-out) infinite;
-  will-change: transform, opacity;
+  display: none;
 }
 
 .ai-thinking-label {
-  font-size: 12px;
-  line-height: 1;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.2;
   color: var(--text-secondary);
-  animation: thinkingLabel 1.4s var(--ease-out) infinite;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+}
+
+.ai-thinking-text-scroll {
+  display: inline-block;
+  animation: textScrollUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes textScrollUp {
+  0% {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .conversation-memory-meter {
@@ -306,7 +290,6 @@
   background: var(--primary-light);
   transform-origin: left center;
   transition: transform 240ms var(--ease-out), background-color 240ms var(--ease-out);
-  will-change: transform;
 }
 
 .conversation-memory-meter[data-level="empty"] .conversation-memory-meter-fill {
@@ -331,25 +314,20 @@
 }
 
 .t-panel-slide {
-  transform: translateY(var(--panel-translate-y));
+  transform: translate3d(0, var(--panel-translate-y), 0);
   opacity: 0;
-  filter: blur(var(--panel-blur));
   pointer-events: none;
   transition:
     transform var(--panel-close-dur) var(--panel-ease),
-    opacity   var(--panel-close-dur) var(--panel-ease),
-    filter    var(--panel-close-dur) var(--panel-ease);
-  will-change: transform, opacity, filter;
+    opacity   var(--panel-close-dur) var(--panel-ease);
 }
 .t-panel-slide[data-open="true"] {
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0);
   opacity: 1;
-  filter: blur(0);
   pointer-events: auto;
   transition:
     transform var(--panel-open-dur) var(--panel-ease),
-    opacity   var(--panel-open-dur) var(--panel-ease),
-    filter    var(--panel-open-dur) var(--panel-ease);
+    opacity   var(--panel-open-dur) var(--panel-ease);
 }
 
 .t-icon-swap {
@@ -383,7 +361,6 @@
     min-width var(--panel-close-dur) var(--panel-ease),
     border-width var(--panel-close-dur) var(--panel-ease);
   overflow: hidden;
-  will-change: width, min-width;
 }
 .chat-sidebar[data-open="false"] {
   width: 0 !important;
@@ -391,14 +368,10 @@
   border-right-width: 0;
 }
 .chat-sidebar-inner {
-  transition:
-    opacity var(--panel-close-dur) var(--panel-ease),
-    filter var(--panel-close-dur) var(--panel-ease);
-  will-change: opacity, filter;
+  transition: opacity var(--panel-close-dur) var(--panel-ease);
 }
 .chat-sidebar[data-open="false"] .chat-sidebar-inner {
   opacity: 0;
-  filter: blur(var(--panel-blur));
   pointer-events: none;
 }
 
@@ -424,6 +397,16 @@
   .stagger-4 { animation-delay: 150ms; }
   .stagger-5 { animation-delay: 200ms; }
   .stagger-6 { animation-delay: 250ms; }
+
+  /* Emil Kowalski press scale */
+  .press-scale {
+    transition: transform 160ms var(--ease-out);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .press-scale:active {
+      transform: scale(0.97);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

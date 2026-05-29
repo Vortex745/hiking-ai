@@ -6,8 +6,9 @@ import { resolve } from 'node:path'
 test('global app layout does not let fixed sidebar cover mobile chat pages', async () => {
   const appSource = await readFile(resolve('src/App.tsx'), 'utf8')
 
-  assert.match(appSource, /min-h-\[100dvh\]/)
+  assert.match(appSource, /h-\[100dvh\]/)
   assert.doesNotMatch(appSource, /h-screen/)
-  assert.match(appSource, /<aside className="[^"]*max-md:hidden/)
-  assert.match(appSource, /<div className="[^"]*ml-sidebar[^"]*max-md:ml-0/)
+  assert.match(appSource, /<nav className="[^"]*fixed top-6 left-1\/2/)
+  assert.match(appSource, /<main className="[^"]*w-full h-full/)
+  assert.doesNotMatch(appSource, /ml-sidebar/)
 })
