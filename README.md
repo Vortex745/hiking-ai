@@ -1,115 +1,111 @@
-# ai-hiking
+# 🥾 AI Hiking
 
-ai-hiking 是一个本地优先的智能徒步助手。项目把 React 前端、Go API Gateway 和 Python FastAPI AI Service 组合在一起，面向徒步知识问答、路线规划、天气适宜性判断、装备建议和风险提醒等场景。
+![Deploy](https://img.shields.io/github/actions/workflow/status/Vortex745/hiking-ai/deploy.yml?branch=main&label=deploy&logo=githubactions&style=for-the-badge)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white&style=for-the-badge)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white&style=for-the-badge)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white&style=for-the-badge)
+![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white&style=for-the-badge)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white&style=for-the-badge)
+![Docker Hub](https://img.shields.io/docker/pulls/zijinn123/ai-hiking?label=Docker%20Hub&logo=docker&style=for-the-badge)
 
-当前 main 分支包含两个主要体验：
+AI Hiking 是一个面向户外徒步场景的智能助手项目。它把 **React 前端**、**Go API Gateway** 和 **Python FastAPI AI Service** 组合在一起，提供 RAG 知识库问答、Agent 行动式对话、路线规划、天气适宜性判断、装备检查、风险提醒和模型配置能力。
 
-- **RAG 模块**：上传或同步徒步资料后进行知识库问答，支持向量检索、BM25 召回、实体信号、查询改写、可选 rerank 和检索调试信息。
-- **Agent 模块**：围绕徒步任务进行行动式对话，结合确定性徒步工作流、LangGraph ReAct fallback、工具风险分级、SSE 流式输出和会话记忆。
+## ✨ 亮点
 
-## 架构
+- 🧭 **徒步 Agent**：识别路线规划、装备检查、风险评估、知识问答等意图，并按场景暴露小而准的工具集。
+- 📚 **RAG 知识库**：支持文档上传、Feishu 同步、向量检索、BM25、RRF 融合、查询改写和可选 rerank。
+- 🌦️ **位置与天气工作流**：前端可传递浏览器定位，后端可用地理/天气工具辅助判断是否适合徒步。
+- ⚡ **SSE 流式体验**：Agent 和 RAG 都通过流式事件返回思考、工具调用、检索过程和最终回答。
+- 🧠 **会话记忆**：支持聊天历史、会话压缩、知识抽取和回答完成后的记忆提交。
+- 🛡️ **工具风险分级**：高风险工具具备确认模型，避免直接执行敏感操作。
+- 🎛️ **浏览器侧模型配置**：`/llm-config` 可配置 LLM、Embedding、Rerank 模型参数。
+
+## 🧱 架构
 
 ```text
 Browser
-  |
-  | HTTP / SSE
-  v
+  │ HTTP / SSE
+  ▼
 frontend/   React 18 + TypeScript + Vite + TailwindCSS
-  |
-  | /api/v1/*
-  v
-gateway/    Go 1.22 + Gin
-  |
-  | HTTP / SSE proxy
-  v
-ai-service/ Python 3.12 + FastAPI + LangChain + LangGraph
-  |
-  +-- Agent: intent intake, hiking workflows, tool policy, memory commit
-  +-- RAG: document loading, query rewriting, hybrid retrieval, rerank
-  +-- Memory: chat history, session compression, extracted knowledge
-  +-- Tools: web, file, terminal, PDF, route, weather, risk, gear
-  |
-  +-- PostgreSQL + pgvector
-  +-- Redis
+  │ /api/v1/*
+  ▼
+gateway/    Go 1.22 + Gin + CORS + proxy
+  │ HTTP / SSE proxy
+  ▼
+ai-service/ Python 3.12 + FastAPI
+  ├─ Agent: intent intake, hiking workflows, LangGraph fallback, memory commit
+  ├─ RAG: loader, query rewrite, vector/BM25 retrieval, rerank, answer augment
+  ├─ Memory: chat history, compression, knowledge extraction, vector store
+  └─ Tools: search, file, terminal, PDF, geo, weather, route, gear, risk
+
+PostgreSQL + pgvector
+Redis
 ```
 
-默认端口：
+## 🧩 模块一览
 
-| Service | URL | Notes |
+| 模块 | 路径 | 说明 |
 |---|---|---|
-| Frontend | `http://localhost:5173` | Vite dev server |
-| Gateway | `http://localhost:8080` | Frontend API entry |
-| AI Service | `http://localhost:8000` | FastAPI app and `/docs` |
-| PostgreSQL | `localhost:5432` | `pgvector/pgvector:pg16` |
-| Redis | `localhost:5379` | Host port mapped to container `6379` |
+| 🖥️ Frontend | `frontend/` | React 页面、assistant-ui 聊天界面、SSE 客户端、模型配置 |
+| 🚪 Gateway | `gateway/` | 统一 `/api/v1/*` 入口，代理 AI Service，处理 CORS 和限流 |
+| 🤖 AI Service | `ai-service/` | Agent、RAG、Memory、工具注册、FastAPI 路由 |
+| 🧰 MCP Server | `mcp-server/` | 扩展工具服务，目前包含图片搜索相关能力 |
+| 🚢 Deploy | `.github/workflows/deploy.yml` | GitHub Actions 构建、推送 Docker Hub、SSH 部署 |
 
-## Tech Stack
+## 🚀 快速开始
 
-- Frontend: React 18, TypeScript, Vite 5, TailwindCSS, React Router, lucide-react
-- Gateway: Go 1.22, Gin, CORS middleware, rate limiting
-- AI Service: Python 3.12, FastAPI, LangChain 0.3, LangGraph 0.2, OpenAI-compatible clients
-- Retrieval: PostgreSQL + pgvector, in-memory fallback, BM25, RRF, optional rerank
-- Runtime dependencies: Docker Compose, Redis, optional `lark-cli`, optional AMap API
+### 1. 克隆项目
 
-## Quick Start
+```bash
+git clone https://github.com/Vortex745/hiking-ai.git
+cd hiking-ai
+```
 
-### 1. Start infrastructure
+### 2. 准备环境变量
+
+复制示例配置并填入自己的模型和可选服务密钥：
+
+```bash
+cp .env.example .env
+```
+
+关键变量：
+
+| 变量 | 用途 |
+|---|---|
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` | 主对话模型 |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 向量模型 |
+| `RERANK_BASE_URL` / `RERANK_API_KEY` / `RERANK_MODEL` | 可选 rerank 模型 |
+| `AMAP_API_KEY` | 可选，高德地图地理与天气能力 |
+| `FEISHU_DEFAULT_SPACE_ID` / `FEISHU_DEFAULT_FOLDER_TOKEN` | 可选，Feishu 默认同步源 |
+
+### 3. Docker Compose 一键启动
 
 ```bash
 docker compose up -d
 ```
 
-This starts:
+默认服务：
 
-- `ai-hiking-postgres`
-- `ai-hiking-redis`
+| 服务 | 地址 | 说明 |
+|---|---|---|
+| 🌐 Frontend | `http://localhost:3000` | Docker 中的 Nginx 静态站点 |
+| 🚪 Gateway | `http://localhost:8080` | API 网关 |
+| 🤖 AI Service | `http://localhost:8000` | FastAPI 服务 |
+| 🐘 PostgreSQL | `localhost:5432` | `pgvector/pgvector:pg16` |
+| 🧱 Redis | `localhost:6379` | `redis:7-alpine` |
 
-### 2. Configure AI Service
+### 4. 本地开发模式
 
-Create `ai-service/.env`. The file is intentionally ignored by Git.
+基础设施：
 
-```env
-# LLM
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_API_KEY=your-llm-api-key
-OPENAI_MODEL=deepseek-v4-flash
-
-# Embeddings
-EMBEDDING_BASE_URL=https://api.openai.com/v1
-EMBEDDING_API_KEY=your-embedding-api-key
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_DIMENSIONS=1536
-
-# Optional rerank
-RERANK_BASE_URL=https://api.openai.com/v1
-RERANK_API_KEY=your-rerank-api-key
-RERANK_MODEL=Qwen/Qwen3-Reranker-8B
-RERANK_ENABLED=true
-
-# Storage
-DATABASE_URL=postgresql://ai_hiking:ai_hiking@localhost:5432/ai_hiking
-REDIS_URL=redis://localhost:5379/0
-MEMORY_STORE_PATH=./memory_store
-MEMORY_ENABLED=true
-
-# Optional hiking data providers
-AMAP_API_KEY=your-amap-key
-
-# Optional Feishu sync defaults
-FEISHU_DEFAULT_SPACE_ID=
-FEISHU_DEFAULT_FOLDER_TOKEN=
+```bash
+docker compose up -d postgres redis
 ```
 
-Notes:
+AI Service：
 
-- `config.py` defaults Redis to `localhost:6379`; when using this repository's `docker-compose.yml`, set `REDIS_URL=redis://localhost:5379/0`.
-- `/llm-config` stores model settings in browser localStorage and sends them with chat/RAG requests. It does not persist secrets to the repository.
-
-### 3. Run AI Service
-
-PowerShell:
-
-```powershell
+```bash
 cd ai-service
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -117,32 +113,14 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Bash:
-
-```bash
-cd ai-service
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-### 4. Run Gateway
+Gateway：
 
 ```bash
 cd gateway
 go run main.go
 ```
 
-Gateway environment variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `8080` | Gateway listen port |
-| `AI_SERVICE_URL` | `http://localhost:8000` | Upstream AI Service URL |
-| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | CORS allow list |
-
-### 5. Run Frontend
+Frontend：
 
 ```bash
 cd frontend
@@ -150,57 +128,50 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+开发模式下访问 `http://localhost:5173`。
 
-## Pages
+## 🗺️ 页面
 
-| Route | Page | Purpose |
+| 路由 | 页面 | 用途 |
 |---|---|---|
-| `/` | Home | Entry page |
-| `/love-master` | RAG module | Knowledge-base Q&A and document upload |
-| `/super-agent` | Agent module | Hiking assistant chat and streamed tool execution |
-| `/llm-config` | LLM config | Browser-side model, embedding and rerank settings |
+| `/` | 首页 | 产品入口和模块跳转 |
+| `/love-master` | RAG 模块 | 文档上传、知识库问答、检索过程展示 |
+| `/super-agent` | Agent 模块 | 徒步助手对话、工具过程、路线/装备/风险任务 |
+| `/llm-config` | 模型配置 | 浏览器侧 LLM、Embedding、Rerank 参数配置 |
 
-## API Surface
+## 🔌 API
 
-The frontend calls the Gateway under `/api/v1/*`.
+前端统一访问 Gateway 的 `/api/v1/*`。
 
-| Method | Gateway path | Description |
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/health` | Gateway health check |
-| `GET` | `/api/v1/chat/health` | Agent health check |
-| `POST` | `/api/v1/chat/sync` | Synchronous Agent chat |
-| `POST` | `/api/v1/chat/sse` | Streaming Agent chat |
-| `GET` | `/api/v1/chat/history/:chatId` | Chat history |
-| `POST` | `/api/v1/models/fetch` | Fetch models from an OpenAI-compatible provider |
-| `GET` | `/api/v1/rag/health` | RAG health check |
-| `POST` | `/api/v1/rag/upload` | Upload a RAG document |
-| `POST` | `/api/v1/rag/query` | Streaming RAG answer |
-| `GET` | `/api/v1/rag/documents` | List uploaded documents |
-| `POST` | `/api/v1/rag/feishu/sync` | Sync a single Feishu document |
-| `POST` | `/api/v1/rag/feishu/default-sync` | Sync configured Feishu sources |
+| `GET` | `/health` | Gateway 健康检查 |
+| `GET` | `/api/v1/chat/health` | Agent 健康检查 |
+| `POST` | `/api/v1/chat/sync` | 同步 Agent 对话 |
+| `POST` | `/api/v1/chat/sse` | SSE Agent 对话 |
+| `GET` | `/api/v1/chat/history/:chatId` | 聊天历史 |
+| `POST` | `/api/v1/chat/confirm` | 工具确认 |
+| `GET` | `/api/v1/chat/pending/:chatId` | 待确认工具 |
+| `POST` | `/api/v1/models/fetch` | 拉取模型列表 |
+| `GET` | `/api/v1/rag/health` | RAG 健康检查 |
+| `POST` | `/api/v1/rag/upload` | 上传知识库文档 |
+| `POST` | `/api/v1/rag/query` | SSE RAG 问答 |
+| `GET` | `/api/v1/rag/documents` | 文档列表 |
+| `POST` | `/api/v1/rag/feishu/sync` | 同步单个 Feishu 文档 |
+| `POST` | `/api/v1/rag/feishu/default-sync` | 同步默认 Feishu 源 |
+| `GET` | `/api/v1/tools` | 工具注册表 |
+| `GET` | `/api/v1/tools/health` | 工具配置健康检查 |
 
-AI Service also exposes direct endpoints:
+## 🤖 Agent 工作流
 
-| Method | AI Service path | Description |
-|---|---|---|
-| `GET` | `/health` | Service health check |
-| `GET` | `/docs` | FastAPI OpenAPI UI |
-| `GET` | `/api/v1/tools` | Tool registry metadata |
-| `GET` | `/api/v1/tools/health` | Tool configuration and external key status |
-| `POST` | `/api/v1/chat/confirm` | Resolve a high-risk tool confirmation |
-| `GET` | `/api/v1/chat/pending/{chat_id}` | List pending tool confirmations |
+核心文件：
 
-## Agent Module
+- `ai-service/agent/intake.py`：意图识别、槽位抽取、当前位置处理。
+- `ai-service/agent/agent.py`：工具选择、LangGraph ReAct fallback、SSE 事件、记忆提交。
+- `ai-service/tools/hiking_domain.py`：徒步领域工具，包括地理、天气、路线、装备、风险和报告。
+- `ai-service/api/chat.py`：Agent HTTP 与 SSE 接口。
 
-Core files:
-
-- `ai-service/agent/intake.py`: deterministic intent detection, slot extraction and current-location normalization
-- `ai-service/agent/agent.py`: LangGraph ReAct wrapper, tool selection, SSE events and memory commit
-- `ai-service/tools/hiking_domain.py`: weather, geo, route, gear, risk and report adapters
-- `ai-service/api/chat.py`: sync and SSE chat endpoints
-
-Supported high-level intents:
+主要意图：
 
 - `general_chat`
 - `knowledge_qa`
@@ -209,153 +180,71 @@ Supported high-level intents:
 - `risk_assessment`
 - `report_export`
 
-Execution flow:
-
-1. The request is normalized with `understand_request()`.
-2. Current-location weather and route flows are prefetched deterministically when possible.
-3. The Agent exposes only a small intent-specific tool set for the current turn.
-4. LangGraph ReAct handles fallback reasoning with `MAX_STEPS = 6`.
-5. SSE emits `thought`, `tool_call`, `tool_result`, `approval_required`, `artifact`, `text`, `done` and `error` events.
-6. Conversation memory is committed only after a final assistant response is produced.
-
-Visible base tools:
-
-- `web_search`
-- `web_scraping`
-- `file_operation`
-- `resource_download`
-- `terminal`
-- `generate_pdf`
-- `terminate`
-
-Hidden hiking-domain tools:
-
-- `weather_lookup`
-- `geo_lookup`
-- `route_research`
-- `hiking_knowledge_search`
-- `gear_checklist`
-- `risk_assessment`
-- `trip_report_export`
-
-## RAG Module
-
-Core files:
-
-- `ai-service/api/rag.py`: upload, query, document list and Feishu sync endpoints
-- `ai-service/rag/loader.py`: file loading and chunking
-- `ai-service/rag/retriever.py`: pgvector/in-memory retrieval, BM25 and hybrid search
-- `ai-service/rag/rewriter.py`: query rewriting and multi-query expansion
-- `ai-service/rag/reranker.py`: optional rerank stage
-- `ai-service/rag/augmenter.py`: context construction for final answers
-
-Supported upload formats:
-
-- `.txt`
-- `.md`
-- `.pdf`
-- `.docx`
-
-Retrieval flow:
-
-1. Normalize and rewrite the user query.
-2. Retrieve candidates through vector search and BM25 lexical search.
-3. Fuse ranked lists with reciprocal rank fusion.
-4. Optionally rerank top candidates.
-5. Stream final answer events back to the frontend.
-
-If pgvector is unavailable, the retriever falls back to memory mode. Memory mode is useful for local development but uploaded documents are not durable across process restarts.
-
-## Memory
-
-Memory code lives in `ai-service/memory/`.
-
-Current pieces:
-
-- `FileChatMemory`: per-chat message history
-- `SessionCompressor`: short-term session compression
-- `KnowledgeExtractor`: extracts durable user/task facts
-- `VectorStore`: FAISS or in-memory vector storage
-- `MemoryCommitter`: commits stable memory after completed answers
-
-The memory layer is conservative: exact duplicates are skipped, approximate duplicates are marked as merge candidates, and existing memory is not silently overwritten.
-
-## Project Layout
+SSE 事件类型：
 
 ```text
-ai-hiking/
-├── ai-service/
-│   ├── main.py
-│   ├── config.py
-│   ├── api/
-│   ├── agent/
-│   ├── rag/
-│   ├── memory/
-│   ├── mcp/
-│   ├── tools/
-│   └── tests/
-├── frontend/
-│   ├── src/
-│   ├── tests/
-│   ├── package.json
-│   └── vite.config.ts
-├── gateway/
-│   ├── main.go
-│   ├── config/
-│   ├── handler/
-│   └── middleware/
-├── mcp-server/image_search/
-├── docker-compose.yml
-└── README.md
+thought
+tool_call
+tool_result
+approval_required
+artifact
+text
+done
+error
 ```
 
-Runtime and generated files are ignored, including:
+## 📚 RAG 工作流
 
-- `ai-service/.env`
-- `.venv/`, `.conda*/`, `__pycache__/`
-- `node_modules/`, `frontend/dist/`
-- `memory_store/`, `memory_data/`, `rag_docs/`, `workspace/`
-- generated Markdown documents other than `README.md`
+核心文件：
 
-## Common Commands
+- `ai-service/api/rag.py`：上传、查询、文档列表、Feishu 同步。
+- `ai-service/rag/loader.py`：文档加载与切分。
+- `ai-service/rag/retriever.py`：pgvector / memory 检索、BM25、混合召回。
+- `ai-service/rag/rewriter.py`：查询改写和多查询扩展。
+- `ai-service/rag/reranker.py`：可选 rerank。
+- `ai-service/rag/augmenter.py`：上下文拼接和答案生成。
 
-Infrastructure:
+支持上传格式：
 
-```bash
-docker compose up -d
-docker compose ps
-docker compose down
+```text
+.txt
+.md
+.pdf
+.docx
 ```
 
-AI Service:
+检索链路：
 
-```bash
-cd ai-service
-pip install -r requirements.txt
-python main.py
-python -m compileall -q agent api memory mcp rag tools main.py config.py
-python -m pytest tests -q
+```text
+问题归一化 → 查询改写 → 向量召回 + BM25 → RRF 融合 → 可选 rerank → 流式答案
 ```
 
-Gateway:
+## 🧪 测试与验证
 
-```bash
-cd gateway
-go run main.go
-go test ./...
-```
-
-Frontend:
+Frontend：
 
 ```bash
 cd frontend
-npm install
-npm run dev
-npm run build
 npm test
+npm run build
 ```
 
-## Health Checks
+Gateway：
+
+```bash
+cd gateway
+go test ./...
+```
+
+AI Service：
+
+```bash
+cd ai-service
+python -m compileall -q .
+python -m pytest tests -q
+```
+
+常用健康检查：
 
 ```bash
 curl http://localhost:8000/health
@@ -363,142 +252,109 @@ curl http://localhost:8000/api/v1/chat/health
 curl http://localhost:8000/api/v1/rag/health
 curl http://localhost:8000/api/v1/tools/health
 curl http://localhost:8080/health
-curl http://localhost:5173/
+curl http://localhost:3000/
 ```
 
-## Troubleshooting
+## 🚢 部署
 
-### Agent reports missing API key
+### GitHub Actions + Docker Hub + Docker Compose
 
-Set `OPENAI_API_KEY` in `ai-service/.env`, or configure LLM settings in `/llm-config` before sending requests from the frontend.
+`main` 分支推送会触发 `.github/workflows/deploy.yml`：
 
-### RAG has no retrieval results
+1. 校验前端、Gateway、AI Service 语法和生产 Compose 文件。
+2. 构建 `ai-service`、`gateway`、`frontend` 三个镜像。
+3. 推送到 Docker Hub 仓库 `zijinn123/ai-hiking`。
+4. 发布 Redis 与 pgvector 的 runtime 镜像副本。
+5. 通过 SSH 上传 `docker-compose.prod.yml` 和生产 `.env`。
+6. 在服务器上拉取 `sha-*` 镜像并重启服务。
 
-Check:
+需要的 GitHub Secrets：
 
-- `EMBEDDING_API_KEY` is configured.
-- PostgreSQL is running on `localhost:5432`.
-- `DATABASE_URL` points to the Docker database.
-- Documents have been uploaded through `/love-master`.
+| Secret | 说明 |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名 |
+| `DOCKERHUB_TOKEN` | Docker Hub Token |
+| `DEPLOY_HOST` | 服务器地址 |
+| `DEPLOY_USER` | SSH 用户 |
+| `DEPLOY_SSH_KEY` | SSH 私钥 |
+| `DEPLOY_PORT` | SSH 端口 |
+| `DEPLOY_PATH` | 服务器部署目录 |
+| `OPENAI_API_KEY` | 生产 LLM Key |
+| `EMBEDDING_API_KEY` | 生产 Embedding Key |
+| `RERANK_API_KEY` | 生产 Rerank Key |
 
-### Redis connection fails
+生产 Compose：
 
-When using the repository Docker setup, set:
-
-```env
-REDIS_URL=redis://localhost:5379/0
+```bash
+DOCKERHUB_IMAGE=zijinn123/ai-hiking IMAGE_TAG=latest docker compose -f docker-compose.prod.yml up -d
 ```
 
-### Weather or location tools return placeholder data
+### CloudBase
 
-Set:
+前端生产环境默认 API 地址配置在 `frontend/src/api/config.ts`：
+
+```text
+https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1
+```
+
+当前 CloudBase 资源：
+
+| 服务 | 类型 | URL |
+|---|---|---|
+| 🌐 Frontend | 静态托管 | `https://ai-hiking-d4gf29b4zcebc048d-1364947792.tcloudbaseapp.com/` |
+| 🚪 Gateway | CloudRun | `https://gateway-262534-6-1364947792.sh.run.tcloudbase.com` |
+| 🤖 AI Service | CloudRun | `https://ai-service-262534-6-1364947792.sh.run.tcloudbase.com` |
+
+## 🧯 排障
+
+### Agent 提示缺少 API Key
+
+检查 `.env` 中的 `OPENAI_API_KEY`，或在 `/llm-config` 中配置可用模型参数。
+
+### RAG 没有检索结果
+
+检查：
+
+- `EMBEDDING_API_KEY` 是否可用。
+- PostgreSQL 是否运行。
+- 是否已经在 `/love-master` 上传文档。
+- `DATABASE_URL` 是否指向正确数据库。
+
+### 天气或位置工具不可用
+
+配置：
 
 ```env
 AMAP_API_KEY=your-amap-key
 ```
 
-### Feishu sync is disabled
+### Feishu 同步不可用
 
-Feishu sync depends on `lark-cli` being available in `PATH`. Optional defaults can be configured with `FEISHU_DEFAULT_SPACE_ID` and `FEISHU_DEFAULT_FOLDER_TOKEN`.
+确认 `lark-cli` 已安装并可在 `PATH` 中访问；必要时设置 `FEISHU_DEFAULT_SPACE_ID` 和 `FEISHU_DEFAULT_FOLDER_TOKEN`。
 
-## Deployment
+## 📁 目录结构
 
-### GitHub Actions + GHCR + Docker Compose
-
-The repository includes a GitHub Actions deployment pipeline in `.github/workflows/deploy.yml`.
-
-On every push to `main`, or on manual `workflow_dispatch`, the workflow:
-
-1. Validates the frontend, gateway, AI service syntax and production Compose file.
-2. Builds three Docker images with Buildx.
-3. Pushes the images to GitHub Container Registry:
-   - `ghcr.io/vortex745/hiking-ai-ai-service`
-   - `ghcr.io/vortex745/hiking-ai-gateway`
-   - `ghcr.io/vortex745/hiking-ai-frontend`
-4. Uploads `docker-compose.prod.yml` to the server over SSH.
-5. Pulls the commit-tagged images and restarts services with Docker Compose.
-
-Required GitHub repository secrets:
-
-| Secret | Description |
-|---|---|
-| `DEPLOY_HOST` | Server hostname or IP |
-| `DEPLOY_USER` | SSH user on the server |
-| `DEPLOY_SSH_KEY` | Private SSH key with access to the server |
-| `DEPLOY_PORT` | SSH port, usually `22` |
-| `DEPLOY_PATH` | Server directory for the production compose file and `.env` |
-
-Server requirements:
-
-- Docker Engine and Docker Compose plugin installed.
-- The `DEPLOY_USER` can run Docker commands.
-- A production `.env` exists in `DEPLOY_PATH`; keep secrets on the server, not in Git.
-- If GHCR packages are private, the workflow logs in during deployment with the repository `GITHUB_TOKEN`.
-
-Production deploy files:
-
-- `docker-compose.prod.yml` pulls GHCR images instead of building locally.
-- Only the frontend port is published by default through `FRONTEND_PORT`.
-- Gateway, AI Service, PostgreSQL and Redis stay on the private Docker network.
-- Runtime data is stored in Docker volumes: `pgdata`, `redis-data`, `ai-memory`, `ai-rag-docs`, and `ai-workspace`.
-
-Manual server smoke check after deployment:
-
-```bash
-cd /path/to/deploy
-docker compose -f docker-compose.prod.yml ps
-curl http://localhost:${FRONTEND_PORT:-3000}/
+```text
+ai-hiking/
+├── ai-service/              # FastAPI AI Service
+│   ├── agent/               # Agent intake, policy, execution
+│   ├── api/                 # FastAPI routers
+│   ├── memory/              # Chat and long-term memory
+│   ├── rag/                 # Retrieval-augmented generation
+│   ├── tools/               # Base and hiking-domain tools
+│   └── tests/
+├── frontend/                # React + Vite frontend
+│   ├── src/
+│   └── tests/
+├── gateway/                 # Go API Gateway
+│   ├── handler/
+│   └── middleware/
+├── mcp-server/              # Optional MCP extensions
+├── docker-compose.yml
+├── docker-compose.prod.yml
+└── README.md
 ```
 
-### CloudBase
+## 📄 License
 
-项目已部署到腾讯云 CloudBase：
-
-| 服务 | 类型 | URL |
-|------|------|-----|
-| **前端** | 静态托管 | `https://ai-hiking-d4gf29b4zcebc048d-1364947792.tcloudbaseapp.com/` |
-| **网关 (Gateway)** | CloudRun | `https://gateway-262534-6-1364947792.sh.run.tcloudbase.com` |
-| **AI 服务** | CloudRun | `https://ai-service-262534-6-1364947792.sh.run.tcloudbase.com` |
-
-### 环境信息
-
-- **EnvId**: `ai-hiking-d4gf29b4zcebc048d`
-- **地域**: 上海 (ap-shanghai)
-- **套餐**: 体验版
-
-### Frontend 静态托管
-
-前端使用 `@cloudbase/js-sdk` 的 `uploadFiles` 工具部署。API 调用通过网关公网 URL 直接跨域请求：
-
-```typescript
-const API_BASE = 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1'
-```
-
-### Gateway CloudRun
-
-- 语言: Go 1.22 + Gin
-- 访问类型: PUBLIC
-- 端口: 8080
-- 资源: 0.25 CPU / 0.5GB MEM
-- 环境变量:
-  - `AI_SERVICE_URL`: `https://ai-service-262534-6-1364947792.sh.run.tcloudbase.com`
-  - `ALLOWED_ORIGINS`: 包含静态托管域和 CloudRun 域
-
-### AI Service CloudRun
-
-- 语言: Python 3.12 + FastAPI
-- 访问类型: PUBLIC
-- 端口: 8000
-- 资源: 1 CPU / 2GB MEM
-- 状态: 运行中（内存模式，无 PostgreSQL/Redis）
-- 功能端点: `/health`、`/api/v1/chat/*`、`/api/v1/rag/*`、`/api/v1/models/*`
-
-### CloudBase 资源
-
-- 静态托管: 用于前端部署
-- CloudRun x3: frontend, gateway, ai-service
-- NoSQL 数据库: 已启用
-
-## License
-
-No standalone `LICENSE` file is currently included.
+当前仓库没有单独的 `LICENSE` 文件。
