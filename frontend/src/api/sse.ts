@@ -33,6 +33,26 @@ function parseSSELine(line: string): SSEEvent | null {
   }
 }
 
+export function parseSSEFrame(frame: string): SSEEvent | null {
+  const data = frame
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5).trimStart())
+    .join('\n')
+    .trim()
+
+  if (data) {
+    try {
+      return JSON.parse(data) as SSEEvent
+    } catch {
+      return null
+    }
+  }
+
+  return parseSSELine(frame)
+}
+
 async function responseErrorMessage(response: Response) {
   const fallback = `HTTP ${response.status}: ${response.statusText || '请求失败'}`
   const text = await response.text().catch(() => '')
@@ -51,68 +71,90 @@ async function responseErrorMessage(response: Response) {
   return `HTTP ${response.status}: ${text.trim()}`
 }
 
-export async function createStreamConnection(
+export function createStreamConnection(
   url: string,
   options: CreateStreamOptions
-): Promise<() => void> {
+): () => void {
   let aborted = false
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  const controller = new AbortController()
 
   const cleanup = () => {
     aborted = true
+    controller.abort()
+    reader?.cancel().catch(() => {
+      // The stream may already be closed.
+    })
   }
 
-  try {
-    const response = await fetch(url, {
-      method: options.method || 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-      body: options.body,
-    })
-
-    if (!response.ok) {
-      options.onError(await responseErrorMessage(response))
-      return cleanup
+  const handleEvent = (event: SSEEvent) => {
+    options.onMessage(event)
+    if (event.type === 'done') {
+      options.onDone?.()
+      cleanup()
+      return true
     }
+    return false
+  }
 
-    options.onOpen?.()
+  const run = async () => {
+    try {
+      const response = await fetch(url, {
+        method: options.method || 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
+        body: options.body,
+        signal: controller.signal,
+      })
 
-    const reader = response.body?.getReader()
-    if (!reader) {
-      options.onError('Response body is not readable')
-      return cleanup
-    }
+      if (!response.ok) {
+        options.onError(await responseErrorMessage(response))
+        return
+      }
 
-    const decoder = new TextDecoder()
-    let buffer = ''
+      options.onOpen?.()
 
-    while (!aborted) {
-      const { done, value } = await reader.read()
-      if (done) break
+      reader = response.body?.getReader() ?? null
+      if (!reader) {
+        options.onError('Response body is not readable')
+        return
+      }
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+      const decoder = new TextDecoder()
+      let buffer = ''
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
+      while (!aborted) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-        const event = parseSSELine(trimmed)
-        if (event) {
-          options.onMessage(event)
-          if (event.type === 'done') {
-            options.onDone?.()
+        buffer += decoder.decode(value, { stream: true })
+        const frames = buffer.split(/\r?\n\r?\n/)
+        buffer = frames.pop() || ''
+
+        for (const frame of frames) {
+          if (!frame.trim()) continue
+          const event = parseSSEFrame(frame)
+          if (event && handleEvent(event)) {
+            return
           }
         }
       }
-    }
-  } catch (error) {
-    if (!aborted) {
-      options.onError(error instanceof Error ? error.message : 'Connection failed')
+
+      const remaining = `${buffer}${decoder.decode()}`
+      if (remaining.trim() && !aborted) {
+        const event = parseSSEFrame(remaining)
+        if (event) handleEvent(event)
+      }
+    } catch (error) {
+      if (!aborted && !(error instanceof DOMException && error.name === 'AbortError')) {
+        options.onError(error instanceof Error ? error.message : 'Connection failed')
+      }
     }
   }
+
+  void run()
 
   return cleanup
 }

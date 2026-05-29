@@ -235,6 +235,71 @@ def test_augmenter_formats_long_answer_into_dense_points(monkeypatch):
     assert "\n3. 心理层面能缓解精神压力" in result
 
 
+def test_augmenter_preserves_summary_with_numbered_points(monkeypatch):
+    """Mixed conclusion + numbered points should not be re-numbered as 2. 1."""
+    from rag.augmenter import ContextAugmenter
+
+    class FakeAIMessage:
+        content = (
+            "徒步前先确认天气和装备。\n"
+            "1. 查看天气预警，避开强降雨和大风。\n"
+            "2. 携带饮水、头灯和保暖层。"
+        )
+
+    class FakeChatModel:
+        def invoke(self, prompt):
+            return FakeAIMessage()
+
+    monkeypatch.setattr("rag.augmenter.ChatOpenAI", lambda **kw: FakeChatModel())
+
+    augmenter = ContextAugmenter(api_key="test-key", base_url="http://fake", model="test")
+    docs = [
+        Document(
+            page_content="徒步前需要查看天气预警，并携带饮水、头灯和保暖层。",
+            metadata={"source": "test"},
+        )
+    ]
+
+    result = augmenter.augment("徒步前需要确认什么", docs)
+
+    assert result == (
+        "徒步前先确认天气和装备。\n"
+        "1. 查看天气预警，避开强降雨和大风。\n"
+        "2. 携带饮水、头灯和保暖层。"
+    )
+    assert "2. 1." not in result
+    assert "3. 2." not in result
+
+
+def test_augmenter_strips_inline_number_markers_before_auto_points(monkeypatch):
+    """Inline numbered markers should not survive inside generated points."""
+    from rag.augmenter import ContextAugmenter
+
+    class FakeAIMessage:
+        content = "徒步前先确认天气。1. 查看天气预警。2. 携带饮水。3. 告知行程。"
+
+    class FakeChatModel:
+        def invoke(self, prompt):
+            return FakeAIMessage()
+
+    monkeypatch.setattr("rag.augmenter.ChatOpenAI", lambda **kw: FakeChatModel())
+
+    augmenter = ContextAugmenter(api_key="test-key", base_url="http://fake", model="test")
+    docs = [
+        Document(
+            page_content="徒步前需要确认天气、查看天气预警、携带饮水并告知行程。",
+            metadata={"source": "test"},
+        )
+    ]
+
+    result = augmenter.augment("徒步前需要确认什么", docs)
+
+    assert "2. 1." not in result
+    assert "3. 2." not in result
+    assert "\n2. 查看天气预警。" in result
+    assert "\n3. 携带饮水。" in result
+
+
 def test_augmenter_stream_outputs_plain_text(monkeypatch):
     """Streaming answers should also hide markdown emphasis and numeric citations."""
     import asyncio

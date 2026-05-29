@@ -106,3 +106,26 @@ def test_hybrid_search_uses_bm25_and_rrf_when_vector_order_is_weak(monkeypatch):
 
     assert [doc.metadata["source"] for doc in results][:1] == ["stove"]
     assert results[0].metadata["retrieval_method"] == "hybrid_rrf"
+
+
+def test_memory_fallback_documents_survive_new_retriever_instance():
+    """Uploaded docs should remain queryable when memory fallback creates a new retriever."""
+    from rag import retriever as retriever_module
+    from rag.retriever import VectorStoreRetriever
+
+    if hasattr(retriever_module, "_SHARED_FALLBACK_DOCS"):
+        retriever_module._SHARED_FALLBACK_DOCS.clear()
+
+    upload_retriever = VectorStoreRetriever(api_key="")
+    upload_retriever.add_documents([
+        Document(
+            page_content="营地选择要避开低洼地，优先选择排水良好的平整区域。",
+            metadata={"source": "upload", "status": "upload"},
+        )
+    ])
+
+    query_retriever = VectorStoreRetriever(api_key="")
+    results = query_retriever.hybrid_search(["营地 低洼地"], k=2, status_filter="upload")
+
+    assert results
+    assert "低洼地" in results[0].page_content

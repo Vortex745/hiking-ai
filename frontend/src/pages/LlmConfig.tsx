@@ -210,7 +210,7 @@ function ModelCombobox({
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-text-secondary">模型名称</span>
         <button
-          className="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-xs text-text-muted transition-all duration-200 ease-[var(--ease-out)] hover:bg-primary/10 hover:text-primary-light disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-xs text-text-muted transition-colors duration-150 ease-[var(--ease-out)] hover:bg-primary/10 hover:text-primary-light disabled:cursor-not-allowed disabled:opacity-40"
           disabled={loading}
           onClick={handleFetch}
           type="button"
@@ -224,7 +224,7 @@ function ModelCombobox({
         </button>
       </div>
       <div className="relative" ref={containerRef}>
-        <div className="flex items-center gap-0 rounded-sm border border-border bg-bg-body transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+        <div className="flex items-center gap-0 rounded-sm border border-border bg-bg-body transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
           <input
             className="h-10 flex-1 bg-transparent px-3 text-sm outline-none"
             id={`${usage}-model`}
@@ -410,14 +410,14 @@ function LlmConfig() {
 
             <div className="flex items-center gap-2">
               <button
-                className="inline-flex h-9 items-center gap-2 rounded-sm border border-border bg-white px-4 text-sm text-text-secondary transition-all duration-200 ease-[var(--ease-out)] hover:border-primary-light hover:text-primary-light active:scale-[0.97]"
+                className="inline-flex h-9 items-center gap-2 rounded-sm border border-border bg-white px-4 text-sm text-text-secondary transition-[transform,border-color,color,background-color] duration-150 ease-[var(--ease-out)] hover:border-primary-light hover:text-primary-light active:scale-[0.97]"
                 onClick={handleReset}
               >
                 <RotateCcw className="h-4 w-4" />
                 重置
               </button>
               <button
-                className="inline-flex h-9 items-center gap-2 rounded-sm bg-primary px-4 text-sm text-white transition-all duration-200 ease-[var(--ease-out)] hover:bg-primary-hover active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-70"
+                className="inline-flex h-9 items-center gap-2 rounded-sm bg-primary px-4 text-sm text-white transition-[transform,background-color,opacity] duration-150 ease-[var(--ease-out)] hover:bg-primary-hover active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-70"
                 disabled={isAutoTesting}
                 onClick={handleSave}
               >
@@ -509,7 +509,7 @@ function LlmConfig() {
             <div className="grid gap-4">
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">Base URL</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <Server className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"
@@ -524,7 +524,7 @@ function LlmConfig() {
 
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">API Key</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <KeyRound className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"
@@ -562,7 +562,7 @@ function LlmConfig() {
             <div className="grid gap-4">
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">Base URL</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <Server className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"
@@ -577,7 +577,7 @@ function LlmConfig() {
 
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">API Key</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <KeyRound className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"
@@ -601,7 +601,7 @@ function LlmConfig() {
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">向量维度</span>
                 <input
-                  className="h-10 rounded-sm border border-border bg-bg-body px-3 text-sm outline-none transition-all duration-200 ease-[var(--ease-out)] focus:border-primary-light focus:bg-white"
+                  className="h-10 rounded-sm border border-border bg-bg-body px-3 text-sm outline-none transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus:border-primary-light focus:bg-white"
                   id="embedding-dimensions"
                   min="64"
                   max="4096"
@@ -630,7 +630,7 @@ function LlmConfig() {
             <div className="grid gap-4">
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">Base URL</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <Server className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"
@@ -645,7 +645,7 @@ function LlmConfig() {
 
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-text-secondary">API Key</span>
-                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-all duration-200 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
+                <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-body px-3 transition-[border-color,background-color] duration-150 ease-[var(--ease-out)] focus-within:border-primary-light focus-within:bg-white">
                   <KeyRound className="h-4 w-4 text-text-muted" />
                   <input
                     className="h-10 flex-1 bg-transparent text-sm outline-none"

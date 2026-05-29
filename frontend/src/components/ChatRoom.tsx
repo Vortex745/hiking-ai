@@ -232,10 +232,18 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }])
 
     const chatId = `chat-${Date.now()}`
+    let streamHandledByCallbacks = false
+
+    const finishStreaming = () => {
+      finalizeStreaming()
+      setIsSending(false)
+      cleanupRef.current = null
+    }
 
     try {
       if (sseEndpoint) {
-        const cleanup = await createStreamConnection(
+        streamHandledByCallbacks = true
+        const cleanup = createStreamConnection(
           sseEndpoint,
           {
             method: 'POST',
@@ -253,18 +261,22 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
               } else if (event.type === 'text') {
                 appendToLastMessage(event.content)
               } else if (event.type === 'done') {
-                finalizeStreaming()
+                finishStreaming()
                 setConnectionStatus('connected')
               } else if (event.type === 'error') {
                 appendToLastMessage(`\n\n[错误] ${event.content}`)
-                finalizeStreaming()
+                finishStreaming()
                 reportConnectionError(event.content || 'Agent 请求失败')
               }
             },
             onError: (error: string) => {
               appendToLastMessage(`\n\n[连接错误] ${error}`)
-              finalizeStreaming()
+              finishStreaming()
               reportConnectionError(error)
+            },
+            onDone: () => {
+              finishStreaming()
+              setConnectionStatus('connected')
             },
           }
         )
@@ -338,7 +350,9 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
       finalizeStreaming()
       reportConnectionError(reason)
     } finally {
-      setIsSending(false)
+      if (!streamHandledByCallbacks) {
+        setIsSending(false)
+      }
     }
   }, [
     input,
