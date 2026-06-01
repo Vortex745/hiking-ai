@@ -258,6 +258,7 @@ test('builds RAG query payload with runnable model settings only', async () => {
   })
 
   assert.equal(payload.question, '查一下知识库')
+  assert.equal(payload.chat_id, undefined)
   assert.equal(payload.status, null)
   assert.deepEqual(payload.model_settings.llm, {
     base_url: 'https://chat.example/v1',
@@ -271,6 +272,14 @@ test('builds RAG query payload with runnable model settings only', async () => {
     dimensions: 4096,
   })
   assert.equal(payload.model_settings.rerank, undefined)
+})
+
+test('builds RAG query payload with a stable chat id when provided', async () => {
+  const { buildRagQueryPayload } = await loadConfigModule()
+  const payload = buildRagQueryPayload('继续查知识库', null, undefined, 'rag-123')
+
+  assert.equal(payload.question, '继续查知识库')
+  assert.equal(payload.chat_id, 'rag-123')
 })
 
 test('measures model latency through the existing models fetch endpoint', async () => {
@@ -294,7 +303,7 @@ test('measures model latency through the existing models fetch endpoint', async 
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, 'https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1/models/fetch')
+  assert.equal(calls[0].input, '/api/v1/models/fetch')
   assert.equal(measurement.latencyMs, 148)
   assert.equal(measurement.modelCount, 2)
   assert.equal(JSON.parse(calls[0].init.body).base_url, 'https://api.example.com/v1')

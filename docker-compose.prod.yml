@@ -17,20 +17,6 @@ services:
       - ai-hiking-net
     restart: unless-stopped
 
-  redis:
-    image: ${DOCKERHUB_IMAGE:-zijinn123/ai-hiking}:runtime-redis-7-alpine
-    container_name: ai-hiking-redis
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - ai-hiking-net
-    restart: unless-stopped
-
   ai-service:
     image: ${DOCKERHUB_IMAGE:-zijinn123/ai-hiking}:ai-service-${IMAGE_TAG:-latest}
     container_name: ai-hiking-ai-service
@@ -46,21 +32,23 @@ services:
       RERANK_API_KEY: ${RERANK_API_KEY}
       RERANK_MODEL: ${RERANK_MODEL:-Qwen/Qwen3-Reranker-8B}
       RERANK_ENABLED: ${RERANK_ENABLED:-true}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ai_hiking}:${POSTGRES_PASSWORD:-ai_hiking}@postgres:5432/${POSTGRES_DB:-ai_hiking}
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-ai_hiking}:${POSTGRES_PASSWORD:-ai_hiking}@postgres:5432/${POSTGRES_DB:-ai_hiking}}
+      REDIS_URL: ${REDIS_URL:-}
+      KV_URL: ${KV_URL:-}
+      UPSTASH_REDIS_URL: ${UPSTASH_REDIS_URL:-}
+      KV_REST_API_URL: ${KV_REST_API_URL:-}
+      KV_REST_API_TOKEN: ${KV_REST_API_TOKEN:-}
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL:-}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN:-}
       MEMORY_STORE_PATH: /app/memory_store
       MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
       AMAP_API_KEY: ${AMAP_API_KEY:-}
-      FEISHU_DEFAULT_SPACE_ID: ${FEISHU_DEFAULT_SPACE_ID:-}
-      FEISHU_DEFAULT_FOLDER_TOKEN: ${FEISHU_DEFAULT_FOLDER_TOKEN:-}
     volumes:
       - ai-memory:/app/memory_store
       - ai-rag-docs:/app/rag_docs
       - ai-workspace:/app/workspace
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     expose:
       - "8000"
@@ -96,7 +84,6 @@ services:
 
 volumes:
   pgdata:
-  redis-data:
   ai-memory:
   ai-rag-docs:
   ai-workspace:

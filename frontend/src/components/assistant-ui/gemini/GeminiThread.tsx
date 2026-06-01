@@ -5,7 +5,7 @@ import {
   MessagePrimitive,
   useMessage,
 } from "@assistant-ui/react";
-import { ArrowUp, RotateCw, Copy, Check, MoreHorizontal, Pin, PinOff, GripHorizontal } from 'lucide-react';
+import { ArrowUp, RotateCw, Copy, Check, MoreHorizontal, Pin, PinOff, GripHorizontal, Paperclip } from 'lucide-react';
 import { getConversationMemoryProgress } from '../../../api/conversationMemory';
 import { useRef, useState, createContext, useContext, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import gsap from 'gsap';
@@ -17,6 +17,7 @@ interface GeminiThreadProps {
   emptyTitle: string;
   /** Called when user clicks "regenerate" — parent should resend the last user prompt */
   onRegenerate?: () => void;
+  onUploadClick?: () => void;
   /** Real message count from the parent page's state (for accurate memory meter) */
   realMessageCount?: number;
 }
@@ -27,11 +28,11 @@ const ThreadActionsContext = createContext<{
   realMessageCount: number;
 }>({ realMessageCount: 0 });
 
-export const GeminiThread = ({ emptyTitle, onRegenerate, realMessageCount = 0 }: GeminiThreadProps) => (
+export const GeminiThread = ({ emptyTitle, onRegenerate, onUploadClick, realMessageCount = 0 }: GeminiThreadProps) => (
   <ThreadActionsContext.Provider value={{ onRegenerate, realMessageCount }}>
     <ThreadPrimitive.Root className="h-full bg-[#fdfcfc] dark:bg-[#131314] flex flex-col overflow-hidden w-full relative">
       <AuiIf condition={(s) => s.thread.isEmpty}>
-        <EmptyState emptyTitle={emptyTitle} />
+        <EmptyState emptyTitle={emptyTitle} onUploadClick={onUploadClick} />
       </AuiIf>
       <AuiIf condition={(s) => !s.thread.isEmpty}>
         <div className="flex-1 overflow-hidden flex flex-col relative w-full">
@@ -40,7 +41,7 @@ export const GeminiThread = ({ emptyTitle, onRegenerate, realMessageCount = 0 }:
           </ThreadPrimitive.Viewport>
           <div className="absolute bottom-0 left-0 right-0 pt-10 pb-4 bg-gradient-to-t from-[#fdfcfc] via-[#fdfcfc] dark:from-[#131314] dark:via-[#131314] to-transparent pointer-events-none">
             <div className="pointer-events-auto">
-              <Composer />
+              <Composer onUploadClick={onUploadClick} />
             </div>
           </div>
         </div>
@@ -49,7 +50,7 @@ export const GeminiThread = ({ emptyTitle, onRegenerate, realMessageCount = 0 }:
   </ThreadActionsContext.Provider>
 );
 
-const EmptyState = ({ emptyTitle }: { emptyTitle: string }) => (
+const EmptyState = ({ emptyTitle, onUploadClick }: { emptyTitle: string; onUploadClick?: () => void }) => (
   <div className="relative flex grow h-full items-center justify-center">
     <div
       aria-hidden="true"
@@ -57,14 +58,25 @@ const EmptyState = ({ emptyTitle }: { emptyTitle: string }) => (
     />
     <div className="relative z-10 w-full max-w-[800px] px-6 flex flex-col items-center">
       <h1 className="text-center text-3xl font-medium mb-12 text-[#1f1f1f] dark:text-[#e3e3e3]">{emptyTitle}</h1>
-      <Composer />
+      <Composer onUploadClick={onUploadClick} />
     </div>
   </div>
 );
 
-const Composer = () => (
+const Composer = ({ onUploadClick }: { onUploadClick?: () => void }) => (
   <ComposerPrimitive.Root className="flex flex-col rounded-3xl bg-white p-2.5 shadow-[0_2px_10px_-2px_rgba(0,0,0,0.18)] dark:bg-[#1e1f20] w-full max-w-[800px] mx-auto border border-black/5 dark:border-white/5">
     <div className="flex items-end gap-2 px-2">
+      {onUploadClick && (
+        <button
+          type="button"
+          onClick={onUploadClick}
+          className="text-[#444746] hover:bg-black/5 hover:text-[#1f1f1f] dark:text-[#c4c7c5] dark:hover:bg-white/5 dark:hover:text-[#e3e3e3] p-2 rounded-full transition-colors flex shrink-0 h-10 w-10 items-center justify-center press-scale"
+          title="上传文档"
+          aria-label="上传文档"
+        >
+          <Paperclip className="w-[18px] h-[18px]" strokeWidth={2} />
+        </button>
+      )}
       <ComposerPrimitive.Input
         placeholder="输入您的问题..."
         className="flex-1 resize-none bg-transparent text-[16px] outline-none border-none py-1.5 min-h-[32px] text-[#1f1f1f] dark:text-[#e3e3e3] placeholder:text-[#444746] dark:placeholder:text-[#c4c7c5]"
@@ -88,7 +100,7 @@ const Composer = () => (
 );
 
 const sourceLabel = (source: string) => {
-  if (source === 'feishu') return '飞书'
+  if (source === 'cloud_docs') return '云知识库'
   if (source === 'upload') return '上传文档'
   if (source === 'unknown') return '未知来源'
   return source

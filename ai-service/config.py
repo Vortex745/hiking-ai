@@ -1,11 +1,11 @@
 import os
-import shutil
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 
-load_dotenv(Path(__file__).with_name(".env"))
+if not os.getenv("VERCEL"):
+    load_dotenv(Path(__file__).with_name(".env"))
 
 
 class Settings:
@@ -23,15 +23,33 @@ class Settings:
     rerank_timeout_seconds: float = 15.0
     rerank_enabled: bool = True
     database_url: str = "postgresql://ai_hiking:ai_hiking@localhost:5432/ai_hiking"
+    database_url_source: str = ""
+    database_connect_timeout_seconds: int = 2
     redis_url: str = "redis://localhost:6379/0"
-    feishu_default_space_id: str = ""
-    feishu_default_folder_token: str = ""
+    redis_url_source: str = ""
+    redis_rest_url: str = ""
+    redis_rest_url_source: str = ""
+    redis_rest_token: str = ""
+    redis_rest_token_source: str = ""
+    rag_docs_api_url: str = ""
     memory_store_path: str = "./memory_store"
     memory_top_k: int = 5
     memory_compressor_model: str = "deepseek-v4-flash"
     memory_extractor_model: str = "deepseek-v4-flash"
     memory_enabled: bool = True
     amap_api_key: str = ""
+
+    def _default_runtime_dir(self, name: str) -> str:
+        if os.getenv("VERCEL"):
+            return str(Path("/tmp") / name)
+        return f"./{name}"
+
+    def _first_env(self, *names: str) -> tuple[str, str]:
+        for name in names:
+            value = os.getenv(name, "").strip()
+            if value:
+                return value, name
+        return "", ""
 
     def load(self) -> "Settings":
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -47,11 +65,29 @@ class Settings:
         self.rerank_top_k = int(os.getenv("RERANK_TOP_K", "4"))
         self.rerank_timeout_seconds = float(os.getenv("RERANK_TIMEOUT_SECONDS", "15"))
         self.rerank_enabled = os.getenv("RERANK_ENABLED", "true").lower() == "true"
-        self.database_url = os.getenv("DATABASE_URL", "postgresql://ai_hiking:ai_hiking@localhost:5432/ai_hiking")
-        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        self.feishu_default_space_id = os.getenv("FEISHU_DEFAULT_SPACE_ID", "")
-        self.feishu_default_folder_token = os.getenv("FEISHU_DEFAULT_FOLDER_TOKEN", "")
-        self.memory_store_path = os.getenv("MEMORY_STORE_PATH", "./memory_store")
+        database_url, database_url_source = self._first_env("DATABASE_URL")
+        self.database_url = database_url or "postgresql://ai_hiking:ai_hiking@localhost:5432/ai_hiking"
+        self.database_url_source = database_url_source if database_url else "local_default"
+        database_timeout_fallback = "10" if os.getenv("VERCEL") else "2"
+        self.database_connect_timeout_seconds = int(os.getenv("DATABASE_CONNECT_TIMEOUT_SECONDS", database_timeout_fallback))
+        redis_url, redis_url_source = self._first_env(
+            "REDIS_URL",
+            "KV_URL",
+            "UPSTASH_REDIS_URL",
+        )
+        redis_fallback = "" if os.getenv("VERCEL") else "redis://localhost:6379/0"
+        self.redis_url = redis_url or redis_fallback
+        self.redis_url_source = redis_url_source if redis_url else ("local_default" if redis_fallback else "")
+        self.redis_rest_url, self.redis_rest_url_source = self._first_env(
+            "UPSTASH_REDIS_REST_URL",
+            "KV_REST_API_URL",
+        )
+        self.redis_rest_token, self.redis_rest_token_source = self._first_env(
+            "UPSTASH_REDIS_REST_TOKEN",
+            "KV_REST_API_TOKEN",
+        )
+        self.rag_docs_api_url = os.getenv("RAG_DOCS_API_URL", "")
+        self.memory_store_path = os.getenv("MEMORY_STORE_PATH", self._default_runtime_dir("memory_store"))
         self.memory_top_k = int(os.getenv("MEMORY_TOP_K", "5"))
         self.memory_compressor_model = os.getenv("MEMORY_COMPRESSOR_MODEL", "deepseek-v4-flash")
         self.memory_extractor_model = os.getenv("MEMORY_EXTRACTOR_MODEL", "deepseek-v4-flash")
@@ -61,8 +97,22 @@ class Settings:
         return self
 
     @property
-    def feishu_enabled(self) -> bool:
-        return shutil.which("lark-cli") is not None
+    def redis_connection_mode(self) -> str:
+        if self.redis_url:
+            return "redis_url"
+        if self.redis_rest_url and self.redis_rest_token:
+            return "upstash_rest"
+        if self.redis_rest_url or self.redis_rest_token:
+            return "incomplete_upstash_rest"
+        return "none"
+
+    @property
+    def redis_configured(self) -> bool:
+        return self.redis_connection_mode in {"redis_url", "upstash_rest"}
+
+    @property
+    def postgres_configured(self) -> bool:
+        return self.database_url_source == "DATABASE_URL"
 
 
 settings = Settings().load()

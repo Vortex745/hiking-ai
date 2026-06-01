@@ -28,7 +28,28 @@ interface ChatSession {
 
 const STORAGE_KEY = 'ai-hiking-rag-chat'
 const SESSIONS_KEY = 'ai-hiking-rag-sessions'
+const CHAT_ID_KEY = 'ai-hiking-rag-chat-id'
 const ACTIVE_SESSION_KEY = 'ai-hiking-rag-active-session'
+
+function createChatId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `rag-${crypto.randomUUID()}`
+  }
+  return `rag-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function getOrCreateChatId() {
+  try {
+    const saved = localStorage.getItem(CHAT_ID_KEY)
+    if (saved) return saved
+
+    const next = createChatId()
+    localStorage.setItem(CHAT_ID_KEY, next)
+    return next
+  } catch {
+    return createChatId()
+  }
+}
 
 function generateId() {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -40,7 +61,7 @@ function getTodayDate() {
 }
 
 function sourceLabel(source: string) {
-  if (source === 'feishu') return '飞书'
+  if (source === 'cloud_docs') return '云知识库'
   if (source === 'upload') return '上传文档'
   if (source === 'unknown') return '未知来源'
   return source
@@ -55,6 +76,19 @@ function loadSessions(): ChatSession[] {
 
 function saveSessions(sessions: ChatSession[]) {
   try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)) } catch { /* ignore */ }
+}
+
+function normalizeServerMessages(payload: unknown): Message[] {
+  const messages = (payload as { messages?: unknown })?.messages
+  if (!Array.isArray(messages)) return []
+  return messages
+    .map(item => {
+      const role = (item as { role?: unknown }).role
+      const content = (item as { content?: unknown }).content
+      if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') return null
+      return { role, content }
+    })
+    .filter((item): item is Message => item !== null)
 }
 
 const convertMessage = (msg: Message, index: number): ThreadMessage => {
@@ -87,7 +121,7 @@ const convertMessage = (msg: Message, index: number): ThreadMessage => {
   } as unknown as ThreadMessage;
 };
 
-function LoveMaster() {
+function HikingRAG() {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -114,6 +148,7 @@ function LoveMaster() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const chatIdRef = useRef(getOrCreateChatId())
 
   // Persist messages
   useEffect(() => {
@@ -132,6 +167,31 @@ function LoveMaster() {
       try { localStorage.removeItem(ACTIVE_SESSION_KEY) } catch { /* ignore */ }
     }
   }, [activeSessionId])
+
+  useEffect(() => {
+    if (messages.length > 0) return
+
+    let cancelled = false
+    const chatId = chatIdRef.current
+
+    async function hydrateServerHistory() {
+      try {
+        const response = await fetch(API.ragHistory(chatId), {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        })
+        if (!response.ok) return
+        const restored = normalizeServerMessages(await response.json())
+        if (restored.length === 0 || cancelled) return
+        setMessages(prev => (prev.length === 0 ? restored : prev))
+      } catch {
+        // Local history remains the fallback.
+      }
+    }
+
+    void hydrateServerHistory()
+    return () => { cancelled = true }
+  }, [messages.length])
 
   useEffect(() => {
     if (!activeSessionId || messages.length === 0) return
@@ -236,6 +296,9 @@ function LoveMaster() {
     const newId = generateId()
     setActiveSessionId(newId)
     setMessages([])
+    const next = createChatId()
+    localStorage.setItem(CHAT_ID_KEY, next)
+    chatIdRef.current = next
     try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
   }, [messages, activeSessionId])
 
@@ -263,6 +326,9 @@ function LoveMaster() {
     if (activeSessionId === sessionId) {
       setActiveSessionId(null)
       setMessages([])
+      const next = createChatId()
+      localStorage.setItem(CHAT_ID_KEY, next)
+      chatIdRef.current = next
       try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
     }
   }, [activeSessionId])
@@ -284,6 +350,7 @@ function LoveMaster() {
 
     const now = new Date()
     const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+    const chatId = chatIdRef.current
     const replaceFromIndex = options.replaceFromIndex
     const nextUserMessage: Message = { role: 'user', content: text, time: timeStr }
     const nextAssistantMessage: Message = { role: 'assistant', content: '', isStreaming: true }
@@ -304,7 +371,7 @@ function LoveMaster() {
     try {
       const cleanup = createStreamConnection(API.ragQuery, {
         method: 'POST',
-        body: JSON.stringify(buildRagQueryPayload(text, null)),
+        body: JSON.stringify(buildRagQueryPayload(text, null, undefined, chatId)),
         onOpen: () => setConnectionStatus('connected'),
         onMessage: (event: SSEEvent) => {
           if (event.type === 'done') {
@@ -387,7 +454,14 @@ function LoveMaster() {
 
   const handleClear = () => {
     setMessages([])
-    try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+    const oldChatId = chatIdRef.current
+    try {
+      void fetch(API.ragHistory(oldChatId), { method: 'DELETE' })
+      localStorage.removeItem(STORAGE_KEY)
+      const next = createChatId()
+      localStorage.setItem(CHAT_ID_KEY, next)
+      chatIdRef.current = next
+    } catch { /* ignore */ }
   }
 
   /** Regenerate: remove the last assistant response, re-send the last user prompt */
@@ -423,6 +497,13 @@ function LoveMaster() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="flex h-full w-full overflow-hidden relative">
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept=".txt,.md,.pdf,.docx"
+          onChange={handleFileUpload}
+        />
         {/* Floating Sidebar (Drawer) */}
         <FloatingSidebar
           isOpen={sidebarOpen}
@@ -449,6 +530,7 @@ function LoveMaster() {
           <GeminiThread
             emptyTitle="徒步知识问答，有什么我可以帮您？"
             onRegenerate={handleRegenerate}
+            onUploadClick={() => fileInputRef.current?.click()}
             realMessageCount={messages.length}
           />
         </div>
@@ -457,4 +539,4 @@ function LoveMaster() {
   )
 }
 
-export default LoveMaster
+export default HikingRAG

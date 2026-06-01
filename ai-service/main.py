@@ -17,6 +17,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ai-hiking AI Service...")
     logger.info(f"OpenAI Base URL: {settings.openai_base_url}")
     logger.info(f"OpenAI Model: {settings.openai_model}")
+    if settings.rag_docs_api_url:
+        logger.info(f"RAG Docs API: {settings.rag_docs_api_url}")
     yield
     logger.info("Shutting down ai-hiking AI Service...")
 

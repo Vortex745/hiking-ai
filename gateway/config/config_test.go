@@ -17,7 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AIServiceURL != "http://localhost:8000" {
 		t.Errorf("expected default AI service URL http://localhost:8000, got %s", cfg.AIServiceURL)
 	}
-	if cfg.AllowedOrigins != "http://localhost:5173,http://127.0.0.1:5173" {
+	if cfg.AllowedOrigins != defaultAllowedOrigins {
 		t.Errorf("unexpected allowed origins: %s", cfg.AllowedOrigins)
 	}
 }

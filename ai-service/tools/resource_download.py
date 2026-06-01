@@ -1,9 +1,9 @@
 import httpx
 from pathlib import Path
 from langchain_core.tools import tool
+from runtime_paths import runtime_dir
 
-WORKSPACE_DIR = Path("./workspace")
-WORKSPACE_DIR.mkdir(exist_ok=True)
+WORKSPACE_DIR = runtime_dir("WORKSPACE_DIR", "workspace")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".csv", ".json", ".xml", ".html", ".zip"}
 

@@ -221,6 +221,7 @@ export interface RuntimeModelSettingsPayload {
 
 export interface RagQueryPayload {
   question: string
+  chat_id?: string
   status: string | null
   model_settings?: RuntimeModelSettingsPayload
 }
@@ -415,9 +416,13 @@ export function buildRagQueryPayload(
   question: string,
   status: string | null,
   settings: LlmSettings = loadLlmSettings(),
+  chatId?: string,
 ): RagQueryPayload {
   const modelSettings = buildRuntimeModelSettings(settings)
   const payload: RagQueryPayload = { question, status }
+  if (chatId) {
+    payload.chat_id = chatId
+  }
 
   if (Object.keys(modelSettings).length > 0) {
     payload.model_settings = modelSettings

@@ -1,8 +1,12 @@
 import time
 import uuid
 import threading
-from dataclasses import dataclass, field
+import logging
+from dataclasses import asdict, dataclass
 from typing import Optional
+
+logger = logging.getLogger("ai-service.confirmation")
+REDIS_CONFIRMATION_STORE_KEY = "agent:confirmations:pending"
 
 
 @dataclass
@@ -29,9 +33,36 @@ class ConfirmationStore:
     线程安全（threading.Lock），适用于多 worker 场景。
     """
 
-    def __init__(self):
+    def __init__(self, persistent_store=None):
         self._lock = threading.Lock()
         self._data: dict[str, PendingConfirmation] = {}
+        self._persistent_store = persistent_store
+        self._load()
+
+    def _load(self) -> None:
+        if self._persistent_store is None:
+            return
+        try:
+            raw = self._persistent_store.get_json(REDIS_CONFIRMATION_STORE_KEY) or {}
+            self._data = {
+                cid: PendingConfirmation(**record)
+                for cid, record in raw.items()
+                if isinstance(record, dict)
+            }
+        except Exception as exc:
+            logger.warning("Failed to load confirmation store from Redis: %s", exc)
+            self._data = {}
+
+    def _save(self) -> None:
+        if self._persistent_store is None:
+            return
+        try:
+            self._persistent_store.set_json(
+                REDIS_CONFIRMATION_STORE_KEY,
+                {cid: asdict(record) for cid, record in self._data.items()},
+            )
+        except Exception as exc:
+            logger.warning("Failed to save confirmation store to Redis: %s", exc)
 
     def add(
         self,
@@ -52,6 +83,7 @@ class ConfirmationStore:
                 chat_id=chat_id,
                 step=step,
             )
+            self._save()
         return cid
 
     def get(self, confirmation_id: str) -> Optional[PendingConfirmation]:
@@ -66,6 +98,7 @@ class ConfirmationStore:
             if rec is None or rec.status != "pending":
                 return False
             rec.status = "confirmed"
+            self._save()
             return True
 
     def reject(self, confirmation_id: str) -> bool:
@@ -75,6 +108,7 @@ class ConfirmationStore:
             if rec is None or rec.status != "pending":
                 return False
             rec.status = "rejected"
+            self._save()
             return True
 
     def get_pending_by_chat(self, chat_id: str) -> list[PendingConfirmation]:
@@ -97,6 +131,7 @@ class ConfirmationStore:
             ]
             for cid in expired:
                 del self._data[cid]
+            self._save()
         return len(expired)
 
 
@@ -108,5 +143,14 @@ def get_store() -> ConfirmationStore:
     """获取全局唯一的 ConfirmationStore 实例。"""
     global _store
     if _store is None:
-        _store = ConfirmationStore()
+        persistent_store = None
+        try:
+            from config import settings
+            from memory.redis_memory import RedisCommandStore
+
+            if settings.redis_configured:
+                persistent_store = RedisCommandStore()
+        except Exception as exc:
+            logger.warning("ConfirmationStore Redis persistence unavailable: %s", exc)
+        _store = ConfirmationStore(persistent_store=persistent_store)
     return _store

@@ -117,3 +117,94 @@ def test_hybrid_search_keeps_bm25_when_pgvector_embedding_fails():
     assert len(results) == 1
     assert "核心目的" in results[0].page_content
     assert results[0].metadata["retrieval_method"] == "hybrid_rrf"
+
+
+def test_document_count_prefers_pgvector_when_available():
+    class CountingPGClient:
+        def document_count(self):
+            return 12
+
+    retriever = object.__new__(retriever_module.VectorStoreRetriever)
+    retriever._fallback_mode = False
+    retriever._pg_client = CountingPGClient()
+    retriever._fallback_docs = [Document(page_content="fallback", metadata={})]
+
+    assert retriever.document_count() == 12
+
+
+def test_indexed_documents_prefers_pgvector_when_available():
+    pg_docs = [
+        Document(page_content="pgvector chunk", metadata={"source": "neon", "status": "feishu"})
+    ]
+
+    class ListingPGClient:
+        def list_documents(self, limit=5000):
+            return pg_docs
+
+    retriever = object.__new__(retriever_module.VectorStoreRetriever)
+    retriever._fallback_mode = False
+    retriever._pg_client = ListingPGClient()
+    retriever._fallback_docs = [Document(page_content="fallback", metadata={})]
+
+    assert retriever.indexed_documents() == pg_docs
+
+
+def test_add_documents_reports_pgvector_success():
+    class FakeEmbeddings:
+        def embed_documents(self, texts):
+            return [[0.1, 0.2] for _ in texts]
+
+    class RecordingPGClient:
+        def __init__(self):
+            self.docs = None
+            self.embeddings = None
+
+        def add_documents(self, docs, embeddings):
+            self.docs = docs
+            self.embeddings = embeddings
+
+    pg_client = RecordingPGClient()
+    docs = [Document(page_content="pgvector indexed", metadata={})]
+    retriever = object.__new__(retriever_module.VectorStoreRetriever)
+    retriever.embeddings = FakeEmbeddings()
+    retriever._fallback_mode = False
+    retriever._pg_client = pg_client
+    retriever._store = None
+    retriever._fallback_docs = []
+
+    result = retriever.add_documents(docs, status="feishu")
+
+    assert result.requested_count == 1
+    assert result.indexed_count == 1
+    assert result.storage_mode == "pgvector"
+    assert result.durable is True
+    assert result.fallback_used is False
+    assert pg_client.docs == docs
+    assert pg_client.embeddings == [[0.1, 0.2]]
+
+
+def test_add_documents_reports_pgvector_fallback_failure():
+    class FakeEmbeddings:
+        def embed_documents(self, texts):
+            return [[0.1, 0.2] for _ in texts]
+
+    class FailingPGClient:
+        def add_documents(self, docs, embeddings):
+            raise RuntimeError("pgvector unavailable")
+
+    docs = [Document(page_content="fallback doc", metadata={})]
+    retriever = object.__new__(retriever_module.VectorStoreRetriever)
+    retriever.embeddings = FakeEmbeddings()
+    retriever._fallback_mode = False
+    retriever._pg_client = FailingPGClient()
+    retriever._store = None
+    retriever._fallback_docs = []
+
+    result = retriever.add_documents(docs)
+
+    assert result.requested_count == 1
+    assert result.indexed_count == 1
+    assert result.storage_mode == "memory"
+    assert result.durable is False
+    assert result.fallback_used is True
+    assert "pgvector unavailable" in result.error

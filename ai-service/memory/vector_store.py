@@ -7,8 +7,10 @@ import numpy as np
 from langchain_openai import OpenAIEmbeddings
 
 from config import settings
+from memory.redis_memory import RedisCommandStore
 
 logger = logging.getLogger("ai-service.memory.vector_store")
+REDIS_VECTOR_STORE_KEY = "agent:memory:knowledge"
 
 FAISS_AVAILABLE = False
 try:
@@ -35,6 +37,7 @@ class VectorStore:
         )
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
+        self._redis_store = RedisCommandStore() if settings.redis_configured else None
 
         # In-memory storage (always available, used by fallback)
         self._items: list[dict] = []
@@ -122,8 +125,15 @@ class VectorStore:
 
     def _save(self) -> None:
         """Persist items and embeddings to disk."""
+        data = {"items": self._items, "embeddings": self._embeddings}
+        if self._redis_store is not None:
+            try:
+                self._redis_store.set_json(REDIS_VECTOR_STORE_KEY, data)
+                return
+            except Exception as e:
+                logger.warning("Failed to save vector store to Redis: %s", e)
+
         try:
-            data = {"items": self._items, "embeddings": self._embeddings}
             with open(self.store_path / "knowledge.pkl", "wb") as f:
                 pickle.dump(data, f)
         except Exception as e:
@@ -131,6 +141,18 @@ class VectorStore:
 
     def _load(self) -> None:
         """Load persisted items from disk."""
+        if self._redis_store is not None:
+            try:
+                data = self._redis_store.get_json(REDIS_VECTOR_STORE_KEY)
+                if data:
+                    self._items = data.get("items", [])
+                    self._embeddings = data.get("embeddings", [])
+                    if self._index is not None and self._embeddings:
+                        self._index.add(np.array(self._embeddings, dtype=np.float32))
+                    return
+            except Exception as e:
+                logger.warning("Failed to load vector store from Redis: %s", e)
+
         pkl_path = self.store_path / "knowledge.pkl"
         if not pkl_path.exists():
             return

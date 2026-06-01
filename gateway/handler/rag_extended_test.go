@@ -67,6 +67,61 @@ func TestRagDocumentsListsDocuments(t *testing.T) {
 	}
 }
 
+func TestRagHistoryProxiesToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/rag/history/rag-123" {
+			t.Errorf("expected path /api/v1/rag/history/rag-123, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"chat_id":"rag-123","messages":[]}`))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewRAGHandler(aiService.URL)
+	router.GET("/api/v1/rag/history/:chatId", handler.RagHistory)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rag/history/rag-123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestRagClearHistoryProxiesToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/rag/history/rag-123" {
+			t.Errorf("expected path /api/v1/rag/history/rag-123, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"cleared"}`))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewRAGHandler(aiService.URL)
+	router.DELETE("/api/v1/rag/history/:chatId", handler.RagClearHistory)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/rag/history/rag-123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
 func TestRagHealthReturnsOk(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -130,65 +185,6 @@ func TestRagHealthFallsBackToGeneralHealth(t *testing.T) {
 	}
 	if body["fallback"] != "ai-service-health" {
 		t.Errorf("expected fallback response, got: %v", body)
-	}
-}
-
-func TestFeishuSyncProxiesToAIService(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/rag/feishu/sync" {
-			t.Errorf("expected /api/v1/rag/feishu/sync, got %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"synced"}`))
-	}))
-	defer aiService.Close()
-
-	router := gin.New()
-	handler := NewRAGHandler(aiService.URL)
-	router.POST("/api/v1/rag/feishu/sync", handler.FeishuSync)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/rag/feishu/sync",
-		strings.NewReader(`{"doc_token":"123"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "synced") {
-		t.Errorf("expected 'synced' in response, got: %s", rec.Body.String())
-	}
-}
-
-func TestFeishuDefaultSyncProxiesToAIService(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/rag/feishu/default-sync" {
-			t.Errorf("expected /api/v1/rag/feishu/default-sync, got %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"synced"}`))
-	}))
-	defer aiService.Close()
-
-	router := gin.New()
-	handler := NewRAGHandler(aiService.URL)
-	router.POST("/api/v1/rag/feishu/default-sync", handler.FeishuDefaultSync)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/rag/feishu/default-sync",
-		strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
 
@@ -276,6 +272,13 @@ func TestDirectRagAnswerUnknownReturnsEmpty(t *testing.T) {
 	answer := directRagAnswerFromBody([]byte(`{"question":"some unknown question about hiking routes"}`))
 	if answer != "" {
 		t.Errorf("expected empty for unknown question, got: %s", answer)
+	}
+}
+
+func TestDirectRagAnswerWithChatIDReturnsEmpty(t *testing.T) {
+	answer := directRagAnswerFromBody([]byte(`{"question":"你好","chat_id":"rag-123"}`))
+	if answer != "" {
+		t.Errorf("expected empty when chat_id is present, got: %s", answer)
 	}
 }
 

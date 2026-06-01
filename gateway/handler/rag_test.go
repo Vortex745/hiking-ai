@@ -31,7 +31,7 @@ func TestRagQueryFallsBackForEmptyMemoryEmbedding404(t *testing.T) {
 	handler := NewRAGHandler(aiService.URL)
 	router.POST("/api/v1/rag/query", handler.RagQuery)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/rag/query", strings.NewReader(`{"question":"测试 RAG","status":"feishu"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/rag/query", strings.NewReader(`{"question":"测试 RAG"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 )
@@ -143,6 +144,10 @@ func proxyStreamRequest(c *gin.Context, method, url string, body io.Reader, cont
 		return
 	}
 
+	if writeBufferedStreamOnVercel(c, resp) {
+		return
+	}
+
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
@@ -168,6 +173,28 @@ func proxyStreamRequest(c *gin.Context, method, url string, body io.Reader, cont
 			break
 		}
 	}
+}
+
+func writeBufferedStreamOnVercel(c *gin.Context, resp *http.Response) bool {
+	if os.Getenv("VERCEL") == "" {
+		return false
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return true
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "text/event-stream"
+	}
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Data(resp.StatusCode, contentType, respBody)
+	return true
 }
 
 func proxyHealthRequest(c *gin.Context, module, url, fallbackURL string) {

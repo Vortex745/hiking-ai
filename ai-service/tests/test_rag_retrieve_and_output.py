@@ -36,6 +36,58 @@ def test_document_search_summary_uses_plain_text_preview():
     assert "[1]" not in preview
 
 
+def test_rag_documents_lists_indexed_pgvector_documents(monkeypatch):
+    from api import rag as rag_api
+
+    class FakeRetriever:
+        storage_mode = "pgvector"
+
+        def document_count(self):
+            return 2
+
+        def indexed_documents(self):
+            return [
+                Document(page_content="chunk one", metadata={"title": "云知识库", "status": "cloud_docs"}),
+                Document(page_content="chunk two", metadata={"title": "云知识库", "status": "cloud_docs"}),
+            ]
+
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/rag/documents")
+
+    assert response.status_code == 200
+    assert response.json()["documents"] == [
+        {
+            "id": response.json()["documents"][0]["id"],
+            "filename": "云知识库",
+            "status": "cloud_docs",
+            "chunk_count": 2,
+        }
+    ]
+
+
+def test_rag_health_counts_indexed_documents_not_tmp_files(monkeypatch, tmp_path):
+    from api import rag as rag_api
+
+    class FakeRetriever:
+        storage_mode = "pgvector"
+
+        def document_count(self):
+            return 7
+
+    monkeypatch.setattr(rag_api, "RAG_DOCS_DIR", tmp_path)
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    (tmp_path / "ephemeral.md").write_text("tmp", encoding="utf-8")
+
+    client = TestClient(app)
+    response = client.get("/api/v1/rag/health")
+
+    assert response.status_code == 200
+    assert response.json()["documents"] == 7
+    assert "memory" in response.json()
+
+
 def test_rag_retrieves_documents_and_generates_answer(monkeypatch):
     """RAG query should retrieve relevant documents and produce an augmented answer."""
 
@@ -99,29 +151,24 @@ def test_rag_retrieves_documents_and_generates_answer(monkeypatch):
 
     assert response.status_code == 200
 
-    # 验证检索被调用
     assert seen["search_query"] == "徒步需要准备什么"
     assert seen["rewritten"] == "徒步需要准备什么"
 
-    # 验证文档被传递给 augmenter
     assert len(seen["augmented_docs"]) == 2
     assert "徒步时应携带足够的水和食物" in seen["augmented_docs"][0]
     assert "防滑登山鞋" in seen["augmented_docs"][1]
     assert seen["augmented_question"] == "徒步需要准备什么"
 
-    # 验证 SSE 输出包含文档检索事件
     assert '"type": "documents"' in body
     assert '"searched_count": 2' in body
     assert '"matched_chunks": 2' in body
     assert "徒步安全指南" in body
     assert "装备清单" in body
 
-    # 验证最终答案输出
     assert '"type": "text"' in body
     assert "根据徒步安全指南" in body
     assert "防滑登山鞋和急救包" in body
 
-    # 验证流结束
     assert '"type": "done"' in body
 
 
@@ -173,6 +220,122 @@ def test_rag_no_documents_returns_friendly_message(monkeypatch):
     assert '"matched_chunks": 0' in body
     assert "我没在知识库里找到" in body
     assert '"type": "done"' in body
+
+
+def test_rag_query_persists_messages_when_chat_id_is_provided(monkeypatch):
+    from api import rag as rag_api
+
+    persisted = []
+
+    class FakeMemory:
+        def add_message(self, role, content):
+            persisted.append({"role": role, "content": content})
+
+        def get_messages(self):
+            return persisted
+
+    monkeypatch.setattr(rag_api, "get_chat_memory", lambda chat_id: FakeMemory())
+
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        "/api/v1/rag/query",
+        json={"question": "你好", "chat_id": "rag-persist"},
+    ) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert '"type": "done"' in body
+    assert persisted == [
+        {"role": "user", "content": "你好"},
+        {
+            "role": "assistant",
+            "content": "你好，我是 AI Hiking 的 RAG 助手。你可以上传文档后向我提问，也可以先问一些简单问题。",
+        },
+    ]
+
+
+def test_rag_history_reads_persisted_messages(monkeypatch):
+    from api import rag as rag_api
+
+    class FakeMemory:
+        def get_messages(self):
+            return [{"role": "user", "content": "查知识库"}]
+
+    monkeypatch.setattr(rag_api, "get_chat_memory", lambda chat_id: FakeMemory())
+
+    client = TestClient(app)
+    response = client.get("/api/v1/rag/history/rag-history")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "chat_id": "rag-history",
+        "messages": [{"role": "user", "content": "查知识库"}],
+    }
+
+
+def test_rag_query_syncs_cloud_docs_when_configured(monkeypatch):
+    from api import rag as rag_api
+
+    seen = {}
+
+    class FakeRetriever:
+        storage_mode = "memory"
+
+        def add_documents(self, docs, status=None):
+            seen["added_docs"] = docs
+            seen["added_status"] = status
+
+        def similarity_search(self, query, k=2, status_filter=None):
+            return []
+
+    class FakeCloudLoader:
+        def load_and_split(self, api_url):
+            seen["api_url"] = api_url
+            return [
+                Document(
+                    page_content="云知识库：雷雨天气不要进入裸露山脊。",
+                    metadata={"source": "cloud_docs", "title": "安全知识库"},
+                )
+            ]
+
+    class FakeRewriter:
+        def rewrite(self, question):
+            return [question]
+
+    class FakeReranker:
+        @property
+        def enabled(self):
+            return False
+
+    class FakeAugmenter:
+        def augment(self, question, docs):
+            seen["augmented_docs"] = docs
+            return f"已读取云知识库：{docs[0].page_content}"
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(rag_api.settings, "rag_docs_api_url", "http://api.example.com/docs/all")
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_api, "CloudDocsLoader", FakeCloudLoader)
+    monkeypatch.setattr(rag_api, "QueryRewriter", FakeRewriter)
+    monkeypatch.setattr(rag_api, "Reranker", FakeReranker)
+    monkeypatch.setattr(rag_api, "ContextAugmenter", FakeAugmenter)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+
+    with client.stream("POST", "/api/v1/rag/query", json={"question": "查知识库里的雷雨徒步"}) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert seen["api_url"] == "http://api.example.com/docs/all"
+    assert seen["added_status"] == "cloud_docs"
+    assert seen["augmented_docs"][0].metadata["title"] == "安全知识库"
+    assert "已同步云知识库文档" in body
+    assert "雷雨天气不要进入裸露山脊" in body
 
 
 def test_rag_irrelevant_retrieval_is_treated_as_no_match(monkeypatch):
@@ -230,59 +393,3 @@ def test_rag_irrelevant_retrieval_is_treated_as_no_match(monkeypatch):
     assert '"searched_count": 0' in body
     assert "我没在知识库里找到" in body
     assert "徒步时应携带" not in body
-
-
-def test_feishu_file_type_download(monkeypatch, tmp_path):
-    """FeishuDocLoader should download file-type documents via drive API."""
-
-    from rag.feishu import FeishuDocLoader, _DOWNLOADABLE_TYPES
-
-    assert "file" in _DOWNLOADABLE_TYPES
-
-    loader = FeishuDocLoader()
-
-    downloaded_file = tmp_path / "test_doc.md"
-    downloaded_file.write_text("# 测试文档\n\n这是飞书文件类型文档的内容。", encoding="utf-8")
-
-    def fake_call_lark_api(method, path, params=None, data=None):
-        if "/download" in path:
-            return {"saved_path": str(downloaded_file), "content_type": "text/markdown; charset=utf-8", "size_bytes": 100}
-        raise RuntimeError(f"unexpected API call: {method} {path}")
-
-    import rag.feishu as feishu_mod
-    monkeypatch.setattr(feishu_mod, "call_lark_api", fake_call_lark_api)
-
-    result = loader.fetch_content("fake_file_token", doc_type="file")
-    assert "测试文档" in result["markdown"]
-    assert "飞书文件类型文档" in result["markdown"]
-    assert result["doc_id"] == "fake_file_token"
-
-
-def test_feishu_wiki_permission_fallback_to_download(monkeypatch, tmp_path):
-    """When Wiki API permission denied, _resolve_document_ref should fallback to file download."""
-
-    from rag.feishu import FeishuDocLoader
-
-    loader = FeishuDocLoader()
-
-    downloaded_file = tmp_path / "wiki_doc.md"
-    downloaded_file.write_text("# Wiki文档\n\nWiki节点内容。", encoding="utf-8")
-
-    def fake_call_lark_api(method, path, params=None, data=None):
-        if "get_node" in path:
-            raise RuntimeError("lark-cli API 错误: Permission denied [99991679]")
-        if "/download" in path:
-            return {"saved_path": str(downloaded_file), "content_type": "text/markdown; charset=utf-8", "size_bytes": 100}
-        raise RuntimeError(f"unexpected API call: {method} {path}")
-
-    import rag.feishu as feishu_mod
-    monkeypatch.setattr(feishu_mod, "call_lark_api", fake_call_lark_api)
-
-    docs = loader.load_and_split(
-        doc_token="https://example.feishu.cn/wiki/WikiNodeToken1234567890ab",
-        title="Wiki文档",
-        doc_type="wiki",
-    )
-    assert len(docs) > 0
-    assert "Wiki节点内容" in docs[0].page_content
-    assert docs[0].metadata["source"] == "feishu"

@@ -142,9 +142,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: redis
-            source: redis:7-alpine
-            target: runtime-redis-7-alpine
           - name: pgvector
             source: pgvector/pgvector:pg16
             target: runtime-pgvector-pg16
@@ -201,6 +198,13 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
           RERANK_API_KEY: ${{ secrets.RERANK_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          KV_URL: ${{ secrets.KV_URL }}
+          UPSTASH_REDIS_URL: ${{ secrets.UPSTASH_REDIS_URL }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$OPENAI_API_KEY"
@@ -219,6 +223,20 @@ jobs:
           RERANK_MODEL=bge-reranker-v2-m3
           RERANK_ENABLED=true
           ENV
+          for optional_key in \
+            REDIS_URL \
+            KV_URL \
+            UPSTASH_REDIS_URL \
+            KV_REST_API_URL \
+            KV_REST_API_TOKEN \
+            UPSTASH_REDIS_REST_URL \
+            UPSTASH_REDIS_REST_TOKEN
+          do
+            optional_value="${!optional_key:-}"
+            if [ -n "$optional_value" ]; then
+              printf '%s=%s\n' "$optional_key" "$optional_value" >> .env.production
+            fi
+          done
           chmod 600 .env.production
           remote="${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           scp -i ~/.ssh/deploy_key -P "${{ secrets.DEPLOY_PORT }}" .env.production "$remote:${{ secrets.DEPLOY_PATH }}/.env"

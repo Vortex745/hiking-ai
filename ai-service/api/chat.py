@@ -16,7 +16,8 @@ from api.models import (
 )
 from api.confirmation_store import get_store
 from agent.agent import AIAgent, AVAILABLE_TOOLS
-from memory.file_memory import FileChatMemory
+from memory.base import ChatMemory
+from memory.factory import chat_memory_status, get_chat_memory
 from config import settings
 
 logger = logging.getLogger("ai-service.chat")
@@ -42,8 +43,8 @@ def _has_llm_api_key(req: ChatRequest) -> bool:
     return bool((runtime_llm and runtime_llm.api_key) or settings.openai_api_key)
 
 
-def _get_memory(chat_id: str) -> FileChatMemory:
-    return FileChatMemory(chat_id=chat_id)
+def _get_memory(chat_id: str) -> ChatMemory:
+    return get_chat_memory(chat_id=chat_id)
 
 
 def _attach_confirmation_if_needed(event: dict, store, chat_id: str, step: int) -> None:
@@ -108,6 +109,7 @@ async def chat_health():
                 "module": "agent",
                 "service": "ai-service",
                 "tools": len(AVAILABLE_TOOLS),
+                "memory": chat_memory_status(),
             }
         agent = AIAgent()
         return {
@@ -115,6 +117,7 @@ async def chat_health():
             "module": "agent",
             "service": "ai-service",
             "tools": len(AVAILABLE_TOOLS),
+            "memory": chat_memory_status(),
         }
     except Exception as e:
         err_str = str(e).lower()
@@ -124,6 +127,7 @@ async def chat_health():
                 "module": "agent",
                 "service": "ai-service",
                 "tools": len(AVAILABLE_TOOLS),
+                "memory": chat_memory_status(),
                 "detail": str(e),
             }
         logger.exception("Agent health check failed")

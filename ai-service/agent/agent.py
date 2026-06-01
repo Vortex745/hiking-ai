@@ -942,7 +942,7 @@ class AIAgent:
         return create_react_agent(
             model=self.llm,
             tools=apply_tool_confirmation_guards(selected_tools),
-            state_modifier=self._make_state_modifier(context, selected_tools),
+            prompt=self._make_state_modifier(context, selected_tools),
         )
 
     def _build_messages(self, message: str, history: list | None = None) -> list:

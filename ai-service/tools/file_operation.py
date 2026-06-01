@@ -1,9 +1,8 @@
-import os
 from pathlib import Path
 from langchain_core.tools import tool
+from runtime_paths import runtime_dir
 
-WORKSPACE_DIR = Path("./workspace")
-WORKSPACE_DIR.mkdir(exist_ok=True)
+WORKSPACE_DIR = runtime_dir("WORKSPACE_DIR", "workspace")
 
 
 def _resolve_path(path: str) -> Path:

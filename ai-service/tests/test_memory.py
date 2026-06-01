@@ -254,8 +254,13 @@ class TestVectorStore:
         patcher.stop()
 
     @pytest.fixture(autouse=True)
-    def _imports(self, tmp_path):
+    def _imports(self, tmp_path, monkeypatch):
+        import memory.vector_store as vector_store_module
         from memory.vector_store import VectorStore
+
+        monkeypatch.setattr(vector_store_module.settings, "redis_url", "")
+        monkeypatch.setattr(vector_store_module.settings, "redis_rest_url", "")
+        monkeypatch.setattr(vector_store_module.settings, "redis_rest_token", "")
 
         self.VectorStore = VectorStore
         self.store_path = str(tmp_path / "memory_store")

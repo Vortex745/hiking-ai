@@ -87,6 +87,21 @@ function getOrCreateChatId() {
   }
 }
 
+function normalizeServerMessages(payload: unknown): Message[] {
+  const messages = (payload as { messages?: unknown })?.messages
+  if (!Array.isArray(messages)) return []
+  return messages
+    .map(item => {
+      const role = (item as { role?: unknown }).role
+      const content = (item as { content?: unknown }).content
+      if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') {
+        return null
+      }
+      return { role, content } as Message
+    })
+    .filter((item): item is Message => item !== null)
+}
+
 function generateId() {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
@@ -196,6 +211,34 @@ function SuperAgent() {
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(messages)) } catch { /* ignore */ }
   }, [messages])
+
+  useEffect(() => {
+    if (messages.length > 0) return
+
+    let cancelled = false
+    const chatId = chatIdRef.current
+
+    async function hydrateServerHistory() {
+      try {
+        const response = await fetch(API.chatHistory(chatId), {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        })
+        if (!response.ok) return
+        const restored = normalizeServerMessages(await response.json())
+        if (restored.length === 0 || cancelled) return
+        setMessages(prev => (prev.length === 0 ? restored : prev))
+      } catch {
+        // Local history remains the fallback.
+      }
+    }
+
+    void hydrateServerHistory()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Persist sessions
   useEffect(() => {

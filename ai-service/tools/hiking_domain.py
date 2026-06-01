@@ -14,13 +14,13 @@ from langchain_core.tools import tool
 from config import settings
 from tools.pdf_generation import generate_pdf
 from tools.web_search import web_search
+from runtime_paths import runtime_dir
 
 
 logger = logging.getLogger("ai-service.hiking_domain")
 
 
-WORKSPACE_DIR = Path("./workspace")
-WORKSPACE_DIR.mkdir(exist_ok=True)
+WORKSPACE_DIR = runtime_dir("WORKSPACE_DIR", "workspace")
 
 
 def _now_iso() -> str:

@@ -60,16 +60,18 @@ func (h *RAGHandler) RagDocuments(c *gin.Context) {
 	proxyRequest(c, http.MethodGet, url, nil)
 }
 
-// FeishuSync forwards a single Feishu doc sync to the AI service.
-func (h *RAGHandler) FeishuSync(c *gin.Context) {
-	url := fmt.Sprintf("%s/api/v1/rag/feishu/sync", h.aiServiceURL)
-	proxyRequest(c, http.MethodPost, url, c.Request.Body)
+// RagHistory forwards a RAG chat history request to the AI service.
+func (h *RAGHandler) RagHistory(c *gin.Context) {
+	chatID := c.Param("chatId")
+	url := fmt.Sprintf("%s/api/v1/rag/history/%s", h.aiServiceURL, chatID)
+	proxyRequest(c, http.MethodGet, url, nil)
 }
 
-// FeishuDefaultSync forwards a bulk Feishu doc sync to the AI service.
-func (h *RAGHandler) FeishuDefaultSync(c *gin.Context) {
-	url := fmt.Sprintf("%s/api/v1/rag/feishu/default-sync", h.aiServiceURL)
-	proxyRequest(c, http.MethodPost, url, c.Request.Body)
+// RagClearHistory clears RAG chat history in the AI service.
+func (h *RAGHandler) RagClearHistory(c *gin.Context) {
+	chatID := c.Param("chatId")
+	url := fmt.Sprintf("%s/api/v1/rag/history/%s", h.aiServiceURL, chatID)
+	proxyRequest(c, http.MethodDelete, url, nil)
 }
 
 func (h *RAGHandler) proxyRagQuery(c *gin.Context, url string) {
@@ -98,6 +100,10 @@ func (h *RAGHandler) proxyRagQuery(c *gin.Context, url string) {
 			return
 		}
 		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), respBody)
+		return
+	}
+
+	if writeBufferedStreamOnVercel(c, resp) {
 		return
 	}
 
@@ -141,8 +147,12 @@ func isRagEmbeddingNotFoundLine(line string) bool {
 func directRagAnswerFromBody(body []byte) string {
 	var req struct {
 		Question string `json:"question"`
+		ChatID   string `json:"chat_id"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(req.ChatID) != "" {
 		return ""
 	}
 

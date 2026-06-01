@@ -62,6 +62,7 @@ AI Hiking 将 React 前端、Go API Gateway 和 Python FastAPI AI Service 组合
 - Go 1.22
 - 可选：`lark-cli`，用于 Feishu 同步
 - 可选：高德地图 API Key，用于地理和天气工具
+- 生产可选：Vercel Marketplace Redis / Upstash，用于持久化聊天历史
 
 ### 克隆仓库
 
@@ -91,6 +92,8 @@ EMBEDDING_DIMENSIONS=1536
 
 ### Docker Compose 启动
 
+Docker Compose 当前仅用于启动基础设施（PostgreSQL 和 Redis）。应用服务请在本地通过环境依赖启动。
+
 ```bash
 docker compose up -d
 ```
@@ -99,9 +102,6 @@ docker compose up -d
 
 | 服务 | 地址 |
 |---|---|
-| Frontend | `http://localhost:3000` |
-| Gateway | `http://localhost:8080` |
-| AI Service | `http://localhost:8000` |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
 
@@ -112,7 +112,7 @@ docker compose up -d
 启动基础设施：
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d
 ```
 
 启动 AI Service：
@@ -176,7 +176,7 @@ ai-service/ Python 3.12 + FastAPI
   └─ Tools: search, file, terminal, PDF, geo, weather, route, gear, risk
 
 PostgreSQL + pgvector
-Redis
+Redis / Upstash Redis
 ```
 
 目录结构：
@@ -245,7 +245,7 @@ python -m pytest tests -q
 1. 校验前端、Gateway、AI Service 语法和生产 Compose 文件。
 2. 构建 `ai-service`、`gateway`、`frontend` 三个镜像。
 3. 推送到 Docker Hub 仓库 `zijinn123/ai-hiking`。
-4. 发布 Redis 与 pgvector 的 runtime 镜像副本。
+4. 发布 pgvector 的 runtime 镜像副本。
 5. 通过 SSH 上传 `docker-compose.prod.yml` 和生产 `.env`。
 6. 在服务器上拉取 `sha-*` 镜像并重启服务。
 
@@ -263,12 +263,22 @@ python -m pytest tests -q
 | `OPENAI_API_KEY` | 生产 LLM Key |
 | `EMBEDDING_API_KEY` | 生产 Embedding Key |
 | `RERANK_API_KEY` | 生产 Rerank Key |
+| `REDIS_URL` | 可选，外部托管 Redis 连接串 |
+| `KV_URL` / `KV_REST_API_URL` / `KV_REST_API_TOKEN` | 可选，Vercel Marketplace Redis / Upstash 自动注入变量 |
 
 ### 生产 Compose
 
 ```bash
 DOCKERHUB_IMAGE=zijinn123/ai-hiking IMAGE_TAG=latest docker compose -f docker-compose.prod.yml up -d
 ```
+
+生产 Compose 只包含应用服务和 Postgres；Redis 不再作为生产容器启动。需要 Redis-backed chat memory 时，提供外部托管 Redis：
+
+```env
+REDIS_URL=rediss://default:...@...
+```
+
+在 Vercel 上，优先通过 Marketplace 连接 Upstash for Redis 到 `ai-hiking-ai-service` 项目。AI Service 会自动识别 `REDIS_URL`、`KV_URL`、`UPSTASH_REDIS_URL`，也兼容 `KV_REST_API_URL` + `KV_REST_API_TOKEN` 或 `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`。没有这些变量时，Vercel Functions 会回退到 `/tmp` 文件内存，不能保证跨冷启动持久。
 
 ### CloudBase
 

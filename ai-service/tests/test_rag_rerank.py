@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from langchain_core.documents import Document
 
@@ -419,3 +420,72 @@ def test_rag_upload_passes_runtime_embedding_settings(monkeypatch, tmp_path):
     assert seen["retriever"]["model"] == "embed-model"
     assert seen["retriever"]["dimensions"] == 4096
     assert seen["status"] == "feishu"
+
+
+def test_rag_upload_fails_when_vector_indexing_falls_back(monkeypatch, tmp_path):
+    """Upload success must mean the chunks were indexed into the searchable store."""
+
+    from api import rag as rag_api
+
+    class FakeLoader:
+        def load_and_split(self, path):
+            return [Document(page_content="server uploaded doc", metadata={"source": path})]
+
+    class FakeRetriever:
+        def add_documents(self, docs, status=None):
+            return SimpleNamespace(
+                requested_count=len(docs),
+                indexed_count=0,
+                storage_mode="memory",
+                durable=False,
+                fallback_used=True,
+                error="pgvector add failed",
+            )
+
+    monkeypatch.setattr(rag_api, "RAG_DOCS_DIR", tmp_path)
+    monkeypatch.setattr(rag_api, "DocumentLoader", FakeLoader)
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/rag/upload",
+        files={"file": ("note.txt", b"hello", "text/plain")},
+    )
+
+    assert response.status_code == 503
+    assert "索引" in response.json()["detail"]
+
+
+def test_rag_upload_fails_when_configured_pgvector_starts_in_memory(monkeypatch, tmp_path):
+    """Production uploads should not succeed when durable pgvector storage is unavailable."""
+
+    from api import rag as rag_api
+
+    class FakeLoader:
+        def load_and_split(self, path):
+            return [Document(page_content="server uploaded doc", metadata={"source": path})]
+
+    class FakeRetriever:
+        def add_documents(self, docs, status=None):
+            return SimpleNamespace(
+                requested_count=len(docs),
+                indexed_count=len(docs),
+                storage_mode="memory",
+                durable=False,
+                fallback_used=False,
+                error=None,
+            )
+
+    monkeypatch.setattr(rag_api.settings, "database_url_source", "DATABASE_URL")
+    monkeypatch.setattr(rag_api, "RAG_DOCS_DIR", tmp_path)
+    monkeypatch.setattr(rag_api, "DocumentLoader", FakeLoader)
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/rag/upload",
+        files={"file": ("note.txt", b"hello", "text/plain")},
+    )
+
+    assert response.status_code == 503
+    assert "持久" in response.json()["detail"]

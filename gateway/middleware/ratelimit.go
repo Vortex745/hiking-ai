@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -18,20 +19,22 @@ func RateLimitMiddleware(rate int, per time.Duration) gin.HandlerFunc {
 	var mu sync.Mutex
 	buckets := make(map[string]*bucket)
 
-	// Cleanup stale buckets
-	go func() {
-		for {
-			time.Sleep(5 * time.Minute)
-			mu.Lock()
-			now := time.Now()
-			for ip, b := range buckets {
-				if now.Sub(b.lastCheck) > 10*time.Minute {
-					delete(buckets, ip)
+	if os.Getenv("VERCEL") == "" {
+		// Cleanup stale buckets for long-running local/container processes.
+		go func() {
+			for {
+				time.Sleep(5 * time.Minute)
+				mu.Lock()
+				now := time.Now()
+				for ip, b := range buckets {
+					if now.Sub(b.lastCheck) > 10*time.Minute {
+						delete(buckets, ip)
+					}
 				}
+				mu.Unlock()
 			}
-			mu.Unlock()
-		}
-	}()
+		}()
+	}
 
 	return func(c *gin.Context) {
 		ip := c.ClientIP()

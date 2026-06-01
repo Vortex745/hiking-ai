@@ -25,7 +25,7 @@ test('applies structured RAG process and document-search events', async () => {
   let state = createEmptyRagStreamState()
   state = applyRagStreamEvent(state, {
     type: 'process',
-    content: '调用 lark-cli api 筛查飞书链接/知识库节点',
+    content: '从云知识库 API 同步文档',
   })
   state = applyRagStreamEvent(state, {
     type: 'documents',
@@ -36,7 +36,7 @@ test('applies structured RAG process and document-search events', async () => {
       documents: [
         {
           title: '徒步安全手册',
-          source: 'feishu',
+          source: 'cloud_docs',
           content: '高原徒步需要提前适应海拔。',
         },
       ],
@@ -47,7 +47,7 @@ test('applies structured RAG process and document-search events', async () => {
     content: '建议先降低强度。',
   })
 
-  assert.deepEqual(state.processSteps, ['调用 lark-cli api 筛查飞书链接/知识库节点'])
+  assert.deepEqual(state.processSteps, ['从云知识库 API 同步文档'])
   assert.equal(state.searchSummary?.searchedCount, 2)
   assert.equal(state.searchSummary?.matchedChunks, 3)
   assert.equal(state.searchSummary?.documents[0].title, '徒步安全手册')

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 const source = readFileSync(new URL('../src/pages/SuperAgent.tsx', import.meta.url), 'utf8')
-const ragSource = readFileSync(new URL('../src/pages/LoveMaster.tsx', import.meta.url), 'utf8')
+const ragSource = readFileSync(new URL('../src/pages/HikingRAG.tsx', import.meta.url), 'utf8')
 const geminiThreadSource = readFileSync(new URL('../src/components/assistant-ui/gemini/GeminiThread.tsx', import.meta.url), 'utf8')
 
 test('quick actions send explicit Agent scenario', () => {
@@ -18,6 +18,31 @@ test('agent requests include saved runtime LLM settings', () => {
   assert.match(source, /const modelSettings = buildRuntimeModelSettings\(\)/)
   assert.match(source, /payload\.model_settings = modelSettings/)
   assert.match(source, /body: JSON\.stringify\(payload\)/)
+})
+
+test('agent page hydrates persisted server history by stable chat id', () => {
+  assert.match(source, /const CHAT_ID_KEY = 'ai-hiking-agent-chat-id'/)
+  assert.match(source, /API\.chatHistory\(chatId\)/)
+  assert.match(source, /normalizeServerMessages/)
+  assert.match(source, /setMessages\(prev => \(prev\.length === 0 \? restored : prev\)\)/)
+})
+
+test('RAG page hydrates persisted server history by stable chat id', () => {
+  assert.match(ragSource, /const CHAT_ID_KEY = 'ai-hiking-rag-chat-id'/)
+  assert.match(ragSource, /API\.ragHistory\(chatId\)/)
+  assert.match(ragSource, /normalizeServerMessages/)
+  assert.match(ragSource, /setMessages\(prev => \(prev\.length === 0 \? restored : prev\)\)/)
+  assert.match(ragSource, /buildRagQueryPayload\(text, null, undefined, chatId\)/)
+})
+
+test('RAG page exposes a visible document upload action', () => {
+  assert.match(ragSource, /ref=\{fileInputRef\}/)
+  assert.match(ragSource, /type="file"/)
+  assert.match(ragSource, /onChange=\{handleFileUpload\}/)
+  assert.match(ragSource, /onUploadClick=\{\(\) => fileInputRef\.current\?\.click\(\)\}/)
+  assert.match(geminiThreadSource, /onUploadClick\?: \(\) => void/)
+  assert.match(geminiThreadSource, /Paperclip/)
+  assert.match(geminiThreadSource, /title="上传文档"/)
 })
 
 test('agent requests include browser current location when available', () => {
@@ -79,6 +104,15 @@ test('Agent and RAG stream text through the client-side typewriter queue', () =>
   assert.match(ragSource, /createTypewriterStreamQueue/)
   assert.match(ragSource, /textStream\.enqueue\(event\.content\)/)
   assert.match(ragSource, /textStream\.finishWhenIdle\(finishStreaming\)/)
+})
+
+test('legacy ChatRoom keeps a stable chat id for Redis-backed history', () => {
+  const chatRoomSource = readFileSync(new URL('../src/components/ChatRoom.tsx', import.meta.url), 'utf8')
+
+  assert.match(chatRoomSource, /const CHAT_ID_KEY_PREFIX = 'ai-hiking-chat-id-'/)
+  assert.match(chatRoomSource, /const chatIdRef = useRef\(getOrCreateChatId\(aiName\)\)/)
+  assert.match(chatRoomSource, /const chatId = chatIdRef\.current/)
+  assert.match(chatRoomSource, /chatHistoryEndpoint\(sseEndpoint, chatIdRef\.current\)/)
 })
 
 test('regenerate replaces the stale turn atomically instead of blanking the thread', () => {

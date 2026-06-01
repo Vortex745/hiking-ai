@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Optional
 
 from langchain_core.documents import Document
@@ -14,6 +15,16 @@ from rag.text_processing import bm25_rank, reciprocal_rank_fusion
 logger = logging.getLogger("ai-service.rag")
 
 _SHARED_FALLBACK_DOCS: list[Document] = []
+
+
+@dataclass(frozen=True)
+class AddDocumentsResult:
+    requested_count: int
+    indexed_count: int
+    storage_mode: str
+    durable: bool
+    fallback_used: bool = False
+    error: str | None = None
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -29,15 +40,16 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 class _PGVectorClient:
     """Lightweight pgvector client using psycopg (sync), no async needed."""
 
-    def __init__(self, db_url: str):
+    def __init__(self, db_url: str, connect_timeout: int = 2):
         self._db_url = db_url
+        self._connect_timeout = connect_timeout
         self._conn = None
         self._ensure_table()
 
     def _get_conn(self):
         if self._conn is None or self._conn.closed:
             import psycopg
-            self._conn = psycopg.connect(self._db_url, connect_timeout=2)
+            self._conn = psycopg.connect(self._db_url, connect_timeout=self._connect_timeout)
             self._conn.autocommit = True
         return self._conn
 
@@ -195,7 +207,10 @@ class VectorStoreRetriever:
             return
 
         try:
-            self._pg_client = _PGVectorClient(settings.database_url)
+            self._pg_client = _PGVectorClient(
+                settings.database_url,
+                connect_timeout=settings.database_connect_timeout_seconds,
+            )
             count = self._pg_client.document_count()
             self._fallback_mode = False
             logger.info("Connected to pgvector, %d documents in store", count)
@@ -217,30 +232,73 @@ class VectorStoreRetriever:
         """Embed a single query."""
         return self.embeddings.embed_query(query)
 
-    def add_documents(self, docs: list[Document], status: Optional[str] = None):
+    def add_documents(self, docs: list[Document], status: Optional[str] = None) -> AddDocumentsResult:
         """Add documents with optional status metadata."""
         for doc in docs:
             if status:
                 doc.metadata["status"] = status
         self._fallback_docs.extend(docs)
+        requested_count = len(docs)
+        started_in_pgvector = not self._fallback_mode and self._pg_client is not None
 
-        if not self._fallback_mode and self._pg_client is not None:
+        if requested_count == 0:
+            return AddDocumentsResult(
+                requested_count=0,
+                indexed_count=0,
+                storage_mode=self.storage_mode,
+                durable=started_in_pgvector,
+            )
+
+        if started_in_pgvector:
             try:
                 texts = [doc.page_content for doc in docs]
                 embs = self._embed_texts(texts)
                 self._pg_client.add_documents(docs, embs)
-                return
+                return AddDocumentsResult(
+                    requested_count=requested_count,
+                    indexed_count=requested_count,
+                    storage_mode="pgvector",
+                    durable=True,
+                )
             except Exception as e:
                 logger.warning("pgvector add failed, falling back to memory: %s", e)
                 self._fallback_mode = True
                 if self._store is None:
                     self._store = InMemoryVectorStore(embedding=self.embeddings)
+                pgvector_error = str(e)
+        else:
+            pgvector_error = None
 
         if self._store is not None:
             try:
                 self._store.add_documents(docs)
+                return AddDocumentsResult(
+                    requested_count=requested_count,
+                    indexed_count=requested_count,
+                    storage_mode="memory",
+                    durable=False,
+                    fallback_used=started_in_pgvector,
+                    error=pgvector_error,
+                )
             except Exception as e:
                 logger.warning("InMemoryVectorStore add failed: %s", e)
+                return AddDocumentsResult(
+                    requested_count=requested_count,
+                    indexed_count=0,
+                    storage_mode="memory",
+                    durable=False,
+                    fallback_used=started_in_pgvector,
+                    error=pgvector_error or str(e),
+                )
+
+        return AddDocumentsResult(
+            requested_count=requested_count,
+            indexed_count=requested_count,
+            storage_mode="memory",
+            durable=False,
+            fallback_used=started_in_pgvector,
+            error=pgvector_error,
+        )
 
     def similarity_search(self, query: str, k: int = 4, status_filter: Optional[str] = None) -> list[Document]:
         """Search for similar documents."""
@@ -312,6 +370,24 @@ class VectorStoreRetriever:
                 rank_lists.append(bm25_docs)
 
         return reciprocal_rank_fusion(rank_lists, k=k)
+
+    def document_count(self) -> int:
+        """Count indexed documents in the active store."""
+        if not self._fallback_mode and self._pg_client is not None:
+            try:
+                return self._pg_client.document_count()
+            except Exception as e:
+                logger.warning("pgvector document count failed: %s", e)
+        return len(self._fallback_docs)
+
+    def indexed_documents(self, limit: int = 5000) -> list[Document]:
+        """List indexed documents from the active store."""
+        if not self._fallback_mode and self._pg_client is not None:
+            try:
+                return self._pg_client.list_documents(limit=limit)
+            except Exception as e:
+                logger.warning("pgvector document listing failed: %s", e)
+        return self._fallback_docs[:limit]
 
     def _all_documents(self, status_filter: Optional[str] = None) -> list[Document]:
         if not self._fallback_mode and self._pg_client is not None:

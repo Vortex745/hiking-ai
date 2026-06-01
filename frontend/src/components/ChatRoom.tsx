@@ -18,6 +18,7 @@ interface ChatRoomProps {
 }
 
 const STORAGE_KEY_PREFIX = 'ai-hiking-chat-'
+const CHAT_ID_KEY_PREFIX = 'ai-hiking-chat-id-'
 const ALERT_DEDUP_WINDOW_MS = 10000
 let lastGlobalAlert = { key: '', time: 0 }
 
@@ -86,6 +87,39 @@ function AiThinking() {
   )
 }
 
+function getOrCreateChatId(aiName: string) {
+  const key = `${CHAT_ID_KEY_PREFIX}${aiName}`
+  try {
+    const saved = localStorage.getItem(key)
+    if (saved) return saved
+    const next = `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    localStorage.setItem(key, next)
+    return next
+  } catch {
+    return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
+function chatHistoryEndpoint(sseEndpoint: string, chatId: string) {
+  if (!sseEndpoint.includes('/chat/sse')) return ''
+  return sseEndpoint.replace(/\/chat\/sse(?:\?.*)?$/, `/chat/history/${encodeURIComponent(chatId)}`)
+}
+
+function normalizeServerMessages(payload: unknown): Message[] {
+  const messages = (payload as { messages?: unknown })?.messages
+  if (!Array.isArray(messages)) return []
+  return messages
+    .map(item => {
+      const role = (item as { role?: unknown }).role
+      const content = (item as { content?: unknown }).content
+      if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') {
+        return null
+      }
+      return { role, content } as Message
+    })
+    .filter((item): item is Message => item !== null)
+}
+
 function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }: ChatRoomProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
@@ -103,6 +137,7 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const lastAlertedErrorRef = useRef('')
+  const chatIdRef = useRef(getOrCreateChatId(aiName))
 
   // Save messages to localStorage
   useEffect(() => {
@@ -121,6 +156,35 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
   useEffect(() => {
     scrollToBottom()
   }, [messages, scrollToBottom])
+
+  useEffect(() => {
+    if (messages.length > 0) return
+    const url = chatHistoryEndpoint(sseEndpoint, chatIdRef.current)
+    if (!url) return
+
+    let cancelled = false
+
+    async function hydrateServerHistory() {
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        })
+        if (!response.ok) return
+        const restored = normalizeServerMessages(await response.json())
+        if (restored.length === 0 || cancelled) return
+        setMessages(prev => (prev.length === 0 ? restored : prev))
+      } catch {
+        // Local storage remains the fallback.
+      }
+    }
+
+    void hydrateServerHistory()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -231,7 +295,7 @@ function ChatRoom({ apiEndpoint, sseEndpoint, healthEndpoint, aiName, aiAvatar }
     setMessages(prev => [...prev, { role: 'user', content: text }])
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }])
 
-    const chatId = `chat-${Date.now()}`
+    const chatId = chatIdRef.current
     let streamHandledByCallbacks = false
 
     const finishStreaming = () => {

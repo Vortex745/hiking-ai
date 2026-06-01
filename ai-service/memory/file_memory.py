@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 from memory.base import ChatMemory
+from runtime_paths import runtime_dir
 
-MEMORY_DIR = Path("./memory_data")
-MEMORY_DIR.mkdir(exist_ok=True)
+MEMORY_DIR = runtime_dir("MEMORY_DATA_DIR", "memory_data")
 WINDOW_SIZE = 60
 
 

@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -13,26 +12,22 @@ from api.models import (
     RAGUploadResponse,
     RAGDocument,
     RuntimeModelSettings,
-    FeishuSyncRequest,
-    FeishuSyncResponse,
-    FeishuDefaultSyncRequest,
-    FeishuDefaultSyncResponse,
-    FeishuDocRef,
 )
 from rag.loader import DocumentLoader
 from rag.retriever import VectorStoreRetriever
-from rag.feishu import FeishuDocLoader, FeishuDefaultSyncer, extract_doc_token, find_feishu_links
+from rag.cloud_docs import CloudDocsLoader
 from config import settings
+from memory.factory import chat_memory_status, get_chat_memory
 from rag.rewriter import QueryRewriter
 from rag.augmenter import ContextAugmenter, has_relevant_evidence
 from rag.reranker import Reranker
 from rag.text_processing import clean_display_text
+from runtime_paths import runtime_dir
 
 logger = logging.getLogger("ai-service.rag")
 rag_router = APIRouter(prefix="/rag")
 
-RAG_DOCS_DIR = Path("./rag_docs")
-RAG_DOCS_DIR.mkdir(exist_ok=True)
+RAG_DOCS_DIR = runtime_dir("RAG_DOCS_DIR", "rag_docs")
 
 
 DIRECT_ANSWER_PATTERNS = {
@@ -120,15 +115,43 @@ def _preview_text(text: str, limit: int = 260) -> str:
 
 def _document_key(doc) -> str:
     metadata = doc.metadata or {}
-    for key in ("feishu_wiki_node_token", "feishu_doc_token", "file_name", "source"):
+    for key in ("title", "file_name", "source"):
         value = metadata.get(key)
         if value:
             return f"{key}:{value}"
     return f"content:{doc.page_content[:80]}"
 
 
+def _document_filename(doc) -> str:
+    metadata = doc.metadata or {}
+    return (
+        metadata.get("title")
+        or metadata.get("file_name")
+        or metadata.get("source")
+        or metadata.get("id")
+        or "indexed-document"
+    )
+
+
+def _indexed_document_refs(retriever: VectorStoreRetriever) -> list[RAGDocument]:
+    grouped: dict[str, RAGDocument] = {}
+    for doc in retriever.indexed_documents():
+        key = _document_key(doc)
+        metadata = doc.metadata or {}
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = RAGDocument(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
+                filename=str(_document_filename(doc)),
+                status=metadata.get("status"),
+                chunk_count=1,
+            )
+        else:
+            current.chunk_count += 1
+    return list(grouped.values())
+
+
 def summarize_retrieved_documents(docs: list) -> dict:
-    """Build a compact document-search summary for the frontend."""
     grouped: dict[str, dict] = {}
 
     for doc in docs:
@@ -139,8 +162,7 @@ def summarize_retrieved_documents(docs: list) -> dict:
             {
                 "title": metadata.get("title") or metadata.get("file_name") or metadata.get("source") or "未命名文档",
                 "source": metadata.get("source", "unknown"),
-                "doc_type": metadata.get("feishu_doc_type") or metadata.get("doc_type") or "",
-                "token": metadata.get("feishu_wiki_node_token") or metadata.get("feishu_doc_token") or "",
+                "doc_type": metadata.get("doc_type") or "",
                 "chunks": 0,
                 "content": "",
             },
@@ -174,6 +196,15 @@ def _dedupe_documents(docs: list) -> list:
     return deduped_docs
 
 
+def _persist_rag_message(memory, role: str, content: str) -> None:
+    if memory is None or not content:
+        return
+    try:
+        memory.add_message(role, content)
+    except Exception as exc:
+        logger.warning("RAG chat persistence failed for role=%s: %s", role, exc)
+
+
 @rag_router.get("/health")
 async def rag_health():
     try:
@@ -183,13 +214,15 @@ async def rag_health():
             raise RuntimeError("RAG documents directory is not writable")
 
         retriever = VectorStoreRetriever()
-        document_count = len([f for f in RAG_DOCS_DIR.iterdir() if f.is_file()])
+        document_count = retriever.document_count()
         return {
             "status": "ok",
             "module": "rag",
             "service": "ai-service",
             "storage": retriever.storage_mode,
             "documents": document_count,
+            "rag_docs_api_configured": bool(settings.rag_docs_api_url),
+            "memory": chat_memory_status(),
         }
     except Exception as e:
         logger.exception("RAG health check failed")
@@ -214,13 +247,32 @@ async def rag_upload(
 
         runtime_settings = _parse_runtime_model_settings(model_settings)
         retriever = VectorStoreRetriever(**_runtime_embedding_kwargs_from_settings(runtime_settings))
-        retriever.add_documents(docs, status)
+        indexing_result = retriever.add_documents(docs, status)
+        if (
+            indexing_result is not None
+            and getattr(indexing_result, "requested_count", len(docs)) > 0
+            and (
+                getattr(indexing_result, "indexed_count", len(docs)) < len(docs)
+                or getattr(indexing_result, "fallback_used", False)
+                or (
+                    settings.postgres_configured
+                    and not getattr(indexing_result, "durable", False)
+                )
+            )
+        ):
+            detail = "文档已接收，但未写入持久向量索引，暂时不能用于知识库检索。"
+            error = getattr(indexing_result, "error", None)
+            if error:
+                detail = f"{detail} 原因：{error}"
+            raise HTTPException(status_code=503, detail=detail)
 
         return RAGUploadResponse(
             filename=file.filename,
             chunks=len(docs),
             status=status or "none",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Upload error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -231,45 +283,17 @@ async def rag_query(req: RAGQuery):
     """RAG query endpoint with SSE streaming."""
 
     async def event_stream():
+        memory = get_chat_memory(req.chat_id) if req.chat_id else None
+        assistant_parts: list[str] = []
         try:
+            _persist_rag_message(memory, "user", req.question)
             direct_answer = direct_rag_answer(req.question)
             if direct_answer is not None:
+                assistant_parts.append(direct_answer)
                 yield _sse_event("text", direct_answer)
+                _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
                 yield _sse_event("done")
                 return
-
-            # 检测飞书 URL 并实时抓取文档
-            feishu_docs: list = []
-            if settings.feishu_enabled:
-                yield _sse_event("process", "调用 lark-cli api 筛查飞书链接/知识库节点")
-                await asyncio.sleep(0.2)
-                try:
-                    links = find_feishu_links(req.question)
-                    if links:
-                        yield _sse_event("process", f"识别到 {len(links)} 个飞书链接，开始读取可用内容")
-                        await asyncio.sleep(0.2)
-                        loader = FeishuDocLoader()
-                        for link in links:
-                            if link.kind == "wiki_space":
-                                yield _sse_event(
-                                    "process",
-                                    "检测到飞书知识库空间链接，请先通过知识库同步入口同步空间内容",
-                                    {"link_kind": link.kind, "token": link.token},
-                                )
-                                continue
-                            feishu_docs.extend(loader.load_and_split(link.raw))
-                        yield _sse_event("process", f"飞书链接读取完成，获得 {len(feishu_docs)} 个文档片段")
-                    else:
-                        yield _sse_event("process", "未发现需要实时读取的飞书链接，转入知识库检索")
-                    await asyncio.sleep(0.2)
-                except Exception as e:
-                    logger.warning("飞书 URL 抓取失败，降级到普通搜索: %s", e)
-                    yield _sse_event(
-                        "process",
-                        f"飞书链接读取失败：{e}。已转入普通知识库检索",
-                        {"error": str(e)},
-                    )
-                    await asyncio.sleep(0.2)
 
             embedding_kwargs = _runtime_embedding_kwargs_from_settings(req.model_settings)
             try:
@@ -282,6 +306,39 @@ async def rag_query(req: RAGQuery):
                     f"自定义 Embedding 配置连接失败，已降级使用默认配置",
                     {"error": str(e)[:200]},
                 )
+
+            cloud_docs: list = []
+            if settings.rag_docs_api_url:
+                yield _sse_event("process", "从云知识库 API 同步文档")
+                await asyncio.sleep(0.2)
+                try:
+                    cloud_loader = CloudDocsLoader()
+                    loaded = cloud_loader.load_and_split(settings.rag_docs_api_url)
+                    if loaded:
+                        retriever.add_documents(loaded, status="cloud_docs")
+                        cloud_docs.extend(loaded)
+                    yield _sse_event(
+                        "process",
+                        (
+                            f"已同步云知识库文档，获得 {len(loaded)} 个文档片段"
+                            if loaded
+                            else "云知识库同步未获得文档片段，请检查 API 地址及返回数据"
+                        ),
+                        {
+                            "source": "cloud_docs_api",
+                            "api_url": settings.rag_docs_api_url,
+                            "chunks": len(loaded),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("云知识库 API 同步失败: %s", e)
+                    yield _sse_event(
+                        "process",
+                        f"云知识库同步失败：{e}。已转入普通知识库检索",
+                        {"error": str(e)},
+                    )
+                await asyncio.sleep(0.2)
+
             llm_kwargs = _runtime_llm_kwargs_from_settings(req.model_settings)
             rewriter = QueryRewriter(**llm_kwargs)
             try:
@@ -392,7 +449,7 @@ async def rag_query(req: RAGQuery):
             )
             await asyncio.sleep(0.2)
 
-            all_docs = feishu_docs + all_docs
+            all_docs = cloud_docs + all_docs
             if reranker.enabled and all_docs:
                 yield _sse_event("process", "调用 Rerank 模型重排候选片段")
                 await asyncio.sleep(0.2)
@@ -415,7 +472,7 @@ async def rag_query(req: RAGQuery):
 
             if (
                 all_docs
-                and not feishu_docs
+                and not cloud_docs
                 and not has_relevant_evidence(req.question, all_docs)
                 and not has_relevant_evidence(humanized_question, all_docs)
             ):
@@ -436,15 +493,16 @@ async def rag_query(req: RAGQuery):
 
             yield _sse_event("process", "构造上下文并调用 LLM 生成回答")
             try:
-                # Try streaming first, fall back to sync
                 has_streamed = False
                 stream_fn = getattr(augmenter, "augment_stream", None)
                 if callable(stream_fn):
                     async for chunk in stream_fn(humanized_question, all_docs):
+                        assistant_parts.append(chunk)
                         yield _sse_event("text", chunk)
                         has_streamed = True
                 if not has_streamed:
                     augmented = augmenter.augment(humanized_question, all_docs)
+                    assistant_parts.append(augmented)
                     yield _sse_event("text", augmented)
             except Exception as e:
                 logger.warning("LLM 生成回答失败: %s", e)
@@ -455,8 +513,10 @@ async def rag_query(req: RAGQuery):
                     f"{chr(10).join(str(d) for d in context_preview)}\n\n"
                     f"原问题：{humanized_question}"
                 )
+                assistant_parts.append(augmented)
                 yield _sse_event("text", augmented)
 
+            _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
             yield _sse_event("done")
         except Exception as e:
             logger.exception("RAG query error")
@@ -472,105 +532,35 @@ async def rag_query(req: RAGQuery):
 @rag_router.get("/documents")
 async def rag_documents():
     """List all uploaded documents."""
-    docs = []
-    for fpath in RAG_DOCS_DIR.iterdir():
-        if fpath.is_file():
-            docs.append(RAGDocument(
-                id=str(uuid.uuid5(uuid.NAMESPACE_URL, str(fpath))),
-                filename=fpath.name,
-                chunk_count=0,
-            ))
+    retriever = VectorStoreRetriever()
+    docs = _indexed_document_refs(retriever)
+    if not docs:
+        for fpath in RAG_DOCS_DIR.iterdir():
+            if fpath.is_file():
+                docs.append(RAGDocument(
+                    id=str(uuid.uuid5(uuid.NAMESPACE_URL, str(fpath))),
+                    filename=fpath.name,
+                    chunk_count=0,
+                ))
     return {"documents": docs}
 
 
-@rag_router.post("/feishu/sync", response_model=FeishuSyncResponse)
-async def feishu_sync(req: FeishuSyncRequest):
-    """同步飞书文档到 RAG 向量存储。
-
-    从飞书拉取文档内容，按 Markdown 拆分后存入向量数据库，
-    以便后续 RAG 检索。
-    """
-    if not settings.feishu_enabled:
-        raise HTTPException(
-            status_code=400,
-            detail="飞书集成未启用，请设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET",
-        )
-
+@rag_router.get("/history/{chat_id}")
+async def rag_history(chat_id: str):
+    """Get persisted RAG chat history for a given chat_id."""
     try:
-        doc_token = extract_doc_token(req.doc_token)
-        doc_refs: list[FeishuDocRef] = []
-
-        loader = FeishuDocLoader()
-        docs = loader.load_and_split(
-            doc_token=doc_token,
-            title=req.title or doc_token,
-            doc_type=req.doc_type,
-        )
-
-        retriever = VectorStoreRetriever()
-        retriever.add_documents(docs, status="feishu")
-
-        doc_refs.append(FeishuDocRef(
-            token=doc_token,
-            title=req.title or doc_token,
-            chunks=len(docs),
-        ))
-
-        return FeishuSyncResponse(status="success", documents=doc_refs)
-
+        memory = get_chat_memory(chat_id)
+        return {"chat_id": chat_id, "messages": memory.get_messages()}
     except Exception as e:
-        logger.exception("飞书文档同步失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@rag_router.post("/feishu/default-sync", response_model=FeishuDefaultSyncResponse)
-async def feishu_default_sync(req: FeishuDefaultSyncRequest):
-    """从飞书空间或文件夹批量同步文档到 RAG 向量存储。
-
-    优先使用请求参数中的 space_id / folder_token，
-    回退到环境变量 FEISHU_DEFAULT_SPACE_ID / FEISHU_DEFAULT_FOLDER_TOKEN。
-    """
-    if not settings.feishu_enabled:
-        raise HTTPException(
-            status_code=400,
-            detail="飞书集成未启用：lark-cli 未安装或不在 PATH 中",
-        )
-
-    space_id = req.space_id or settings.feishu_default_space_id
-    folder_token = req.folder_token or settings.feishu_default_folder_token
-
-    if not space_id and not folder_token:
-        raise HTTPException(
-            status_code=400,
-            detail="请设置 FEISHU_DEFAULT_SPACE_ID 或 FEISHU_DEFAULT_FOLDER_TOKEN 环境变量，"
-                    "或在请求中提供 space_id / folder_token",
-        )
-
+@rag_router.delete("/history/{chat_id}")
+async def rag_clear_history(chat_id: str):
+    """Clear persisted RAG chat history for a given chat_id."""
     try:
-        loader = FeishuDocLoader()
-        retriever = VectorStoreRetriever()
-        syncer = FeishuDefaultSyncer(loader, retriever)
-
-        if folder_token:
-            synced = syncer.sync_from_folder(folder_token)
-        else:
-            synced = syncer.sync_from_space(space_id)
-
-        doc_refs = [
-            FeishuDocRef(
-                token=doc["token"],
-                title=doc["title"],
-                chunks=doc["chunks"],
-            )
-            for doc in synced
-        ]
-
-        return FeishuDefaultSyncResponse(
-            status="success",
-            synced_count=len(doc_refs),
-            documents=doc_refs,
-        )
-
+        memory = get_chat_memory(chat_id)
+        memory.clear()
+        return {"chat_id": chat_id, "status": "cleared"}
     except Exception as e:
-        logger.exception("飞书默认同步失败")
         raise HTTPException(status_code=500, detail=str(e))

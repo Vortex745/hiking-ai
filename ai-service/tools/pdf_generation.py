@@ -1,11 +1,10 @@
-from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from langchain_core.tools import tool
+from runtime_paths import runtime_dir
 
-WORKSPACE_DIR = Path("./workspace")
-WORKSPACE_DIR.mkdir(exist_ok=True)
+WORKSPACE_DIR = runtime_dir("WORKSPACE_DIR", "workspace")
 
 
 @tool

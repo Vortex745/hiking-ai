@@ -49,7 +49,7 @@ test('calculates single-conversation memory progress from the 60-message window'
 test('Agent and RAG pages share one conversation memory meter component', async () => {
   const [agentSource, ragSource, threadSource] = await Promise.all([
     readFile(resolve('src/pages/SuperAgent.tsx'), 'utf8'),
-    readFile(resolve('src/pages/LoveMaster.tsx'), 'utf8'),
+    readFile(resolve('src/pages/HikingRAG.tsx'), 'utf8'),
     readFile(resolve('src/components/assistant-ui/gemini/GeminiThread.tsx'), 'utf8'),
   ])
 

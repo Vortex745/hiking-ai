@@ -469,6 +469,33 @@ def test_agent_stream_uses_llm_query_rewrite_metadata(monkeypatch):
     assert rewrite_event["metadata"]["rewritten_query"] == "今天本地天气适合徒步吗"
 
 
+def test_react_agent_uses_prompt_kwarg_for_langgraph_compatibility(monkeypatch):
+    """LangGraph 0.2.68+ replaced state_modifier/messages_modifier with prompt."""
+    monkeypatch.setattr(settings, "memory_enabled", False)
+    fake_agent = FakeStreamingAgent([
+        {
+            "agent": {
+                "messages": [
+                    SimpleNamespace(content="兼容参数正常", tool_calls=[])
+                ]
+            }
+        }
+    ])
+
+    with patch("agent.agent.ChatOpenAI"), patch("agent.agent.create_react_agent", return_value=fake_agent) as mock_create:
+        from agent.agent import AIAgent
+
+        ai_agent = AIAgent()
+        events = collect_async(ai_agent.aexecute_stream("今天的天气怎么样"))
+
+    assert any(event["type"] == "text" and event["content"] == "兼容参数正常" for event in events)
+    _, kwargs = mock_create.call_args
+    assert "prompt" in kwargs
+    assert callable(kwargs["prompt"])
+    assert "state_modifier" not in kwargs
+    assert "messages_modifier" not in kwargs
+
+
 def test_agent_stream_emits_approval_required_for_high_risk_tool(monkeypatch):
     """High-risk tool calls should surface approval before the tool result is accepted."""
     monkeypatch.setattr(settings, "memory_enabled", False)
