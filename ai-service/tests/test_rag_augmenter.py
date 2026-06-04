@@ -31,6 +31,27 @@ def test_augmenter_no_llm_returns_context():
     assert "[1]" not in result
 
 
+def test_augmenter_no_llm_bolds_route_metrics_and_risk_terms():
+    """No-LLM fallback should still emphasize scan-critical route details."""
+    from rag.augmenter import ContextAugmenter
+
+    augmenter = ContextAugmenter(api_key="")
+    docs = [
+        Document(
+            page_content="白云山—南门全程8-10公里，门票5元，高温时不建议正午出发。",
+            metadata={"source": "test"},
+        )
+    ]
+
+    result = augmenter.augment("白云山徒步路线", docs)
+
+    assert "**白云山**" in result
+    assert "**8-10公里**" in result
+    assert "**5元**" in result
+    assert "**高温**" in result
+    assert "**不建议**" in result
+
+
 def test_augmenter_no_llm_does_not_dump_full_markdown_context():
     """No-LLM fallback should answer with compact points, not source/meta text."""
     from rag.augmenter import ContextAugmenter
@@ -173,8 +194,8 @@ def test_augmenter_rejects_weakly_related_docs_even_with_llm(monkeypatch):
     assert "徒步时应携带" not in result
 
 
-def test_augmenter_prompt_requires_grounded_plain_text(monkeypatch):
-    """The RAG prompt should force grounded plain text, not visible markdown."""
+def test_augmenter_prompt_requires_grounded_text_with_key_emphasis(monkeypatch):
+    """The RAG prompt should force grounded text while preserving key emphasis."""
     from rag.augmenter import ContextAugmenter
 
     invoked = {}
@@ -194,10 +215,10 @@ def test_augmenter_prompt_requires_grounded_plain_text(monkeypatch):
     result = augmenter.augment("徒步要带什么", docs)
 
     prompt_text = "\n".join(getattr(message, "content", "") for message in invoked["prompt"])
-    assert result == "徒步要带足够的水。"
+    assert result == "徒步要带**足够的水**。"
     assert "每个关键事实" in prompt_text
     assert "不要写“根据文档”" in prompt_text
-    assert "不要使用 Markdown 加粗" in prompt_text
+    assert "使用 **加粗** 标记" in prompt_text
     assert "文档外" in prompt_text
 
 
@@ -264,7 +285,7 @@ def test_augmenter_preserves_summary_with_numbered_points(monkeypatch):
 
     assert result == (
         "徒步前先确认天气和装备。\n"
-        "1. 查看天气预警，避开强降雨和大风。\n"
+        "1. 查看天气预警，**避开强降雨**和**大风**。\n"
         "2. 携带饮水、头灯和保暖层。"
     )
     assert "2. 1." not in result
@@ -300,8 +321,8 @@ def test_augmenter_strips_inline_number_markers_before_auto_points(monkeypatch):
     assert "\n3. 携带饮水。" in result
 
 
-def test_augmenter_stream_outputs_plain_text(monkeypatch):
-    """Streaming answers should also hide markdown emphasis and numeric citations."""
+def test_augmenter_stream_outputs_emphasized_text(monkeypatch):
+    """Streaming answers should preserve key markdown emphasis and hide numeric citations."""
     import asyncio
     from rag.augmenter import ContextAugmenter
 
@@ -324,7 +345,7 @@ def test_augmenter_stream_outputs_plain_text(monkeypatch):
         return "".join(chunks)
 
     result = asyncio.run(collect())
-    assert result == "徒步的主要目的是亲近自然。"
+    assert result == "徒步的主要目的是**亲近自然**。"
 
 
 def test_augmenter_stream_returns_async_iterator(monkeypatch):

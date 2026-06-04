@@ -90,6 +90,14 @@ try:
 except ImportError as e:
     logger.warning(f"✗ Tools router unavailable: {e}")
 
+# artifacts 路由: 下载 workspace 内由 Agent 生成的文件
+try:
+    from api.artifacts import artifacts_router
+    app.include_router(artifacts_router, prefix="/api/v1")
+    logger.info("✓ Artifacts router loaded")
+except ImportError as e:
+    logger.warning(f"✗ Artifacts router unavailable: {e}")
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

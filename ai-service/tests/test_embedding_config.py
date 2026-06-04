@@ -2,6 +2,7 @@
 
 import os
 import sys
+import json
 from pathlib import Path
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key-for-testing")
@@ -67,6 +68,25 @@ def test_settings_loads_independent_rerank_config(monkeypatch):
     assert settings.rerank_model == "rerank-model"
     assert settings.rerank_top_k == 6
     assert settings.rerank_timeout_seconds == 8
+
+
+def test_settings_loads_mcp_server_and_capability_config(monkeypatch):
+    monkeypatch.setenv("MCP_SERVERS", json.dumps({
+        "amap": {
+            "command": "amap-mcp",
+            "args": ["--stdio"],
+        }
+    }))
+    monkeypatch.setenv("MCP_CAPABILITY_MAP", json.dumps({
+        "weather": {"server": "amap", "tool": "weather"},
+        "geocode": {"server": "amap", "tool": "geocode"},
+        "reverse_geocode": {"server": "amap", "tool": "regeo"},
+    }))
+
+    settings = Settings().load()
+
+    assert settings.mcp_servers["amap"]["command"] == "amap-mcp"
+    assert settings.mcp_capability_map["weather"] == {"server": "amap", "tool": "weather"}
 
 
 def test_rag_retriever_uses_embedding_config(monkeypatch):

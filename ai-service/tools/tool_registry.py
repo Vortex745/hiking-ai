@@ -107,6 +107,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolMetadata] = {}
         self._buckets: dict[str, TokenBucket] = {}
+        self._instances: dict[str, Any] = {}
 
     # ── 注册 ──────────────────────────────────────────────
 
@@ -124,6 +125,36 @@ class ToolRegistry:
         """批量注册工具。"""
         for md in metadata_list:
             self.register(md)
+
+    def register_tool(self, name: str, tool_instance: Any | None, metadata: ToolMetadata) -> None:
+        """Register a tool with both metadata and instance in one call.
+
+        This is the unified registration method that replaces the
+        separate register() + AVAILABLE_TOOL_MAP pattern.
+
+        Args:
+            name: Tool name (must match metadata.name).
+            tool_instance: The tool object (with ainvoke/invoke), or None.
+            metadata: Tool metadata for validation, risk, and rate limiting.
+        """
+        self.register(metadata)
+        self._instances[name] = tool_instance
+
+    def register_many_tools(self, entries: list[tuple[str, Any | None, ToolMetadata]]) -> None:
+        """Batch-register tools with instances.
+
+        Args:
+            entries: List of (name, tool_instance, metadata) tuples.
+        """
+        for name, instance, metadata in entries:
+            self.register_tool(name, instance, metadata)
+
+    def get_tool_instance(self, name: str) -> Any | None:
+        """Get the registered tool instance by name.
+
+        Returns None if the tool has no registered instance.
+        """
+        return self._instances.get(name)
 
     # ── 读取 ──────────────────────────────────────────────
 
@@ -233,6 +264,129 @@ class ToolRegistry:
             needs_confirmation=self.needs_confirmation(name),
             rate_limit_remaining=remaining,
         )
+
+    # ── 执行 ──────────────────────────────────────────────
+
+    async def execute_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        tool_map: dict[str, Any] | None = None,
+        skip_validation: bool = False,
+    ) -> dict[str, Any]:
+        """Execute a tool with unified validation, risk gating, and result wrapping.
+
+        Args:
+            name: Tool name to execute.
+            args: Tool arguments.
+            tool_map: Mapping of tool names to tool objects (with .ainvoke or .invoke).
+                      If None, returns a validation-only result.
+            skip_validation: Skip rate-limit and validation checks (e.g., for internal calls).
+
+        Returns:
+            A dict with keys:
+              - ok: bool - whether execution succeeded
+              - result: Any - the raw tool result (on success)
+              - error: str | None - error message (on failure)
+              - tool_name: str
+              - args: dict - the arguments used
+              - duration_ms: float
+              - step_index: int - always 0 here, set by caller
+              - validated: bool - whether validation passed
+              - needs_confirmation: bool
+        """
+        import asyncio
+        import time
+
+        md = self._tools.get(name)
+        needs_confirm = self.needs_confirmation(name) if md else False
+
+        # Validation
+        if not skip_validation:
+            validation = self.validate_call(name, args)
+            if not validation.valid:
+                return {
+                    "ok": False,
+                    "result": None,
+                    "error": validation.error,
+                    "tool_name": name,
+                    "args": args,
+                    "duration_ms": 0.0,
+                    "step_index": 0,
+                    "validated": False,
+                    "needs_confirmation": needs_confirm,
+                }
+        else:
+            needs_confirm = False  # Skip validation implies skip confirmation
+
+        # No tool_map provided - try registered instance first
+        if tool_map is None:
+            tool = self._instances.get(name)
+            if tool is None:
+                return {
+                    "ok": False,
+                    "result": None,
+                    "error": f"Tool '{name}' has no registered instance and no tool_map provided",
+                    "tool_name": name,
+                    "args": args,
+                    "duration_ms": 0.0,
+                    "step_index": 0,
+                    "validated": True,
+                    "needs_confirmation": needs_confirm,
+                }
+        else:
+            tool = tool_map.get(name)
+            # If not in tool_map, fall back to registered instance
+            if tool is None:
+                tool = self._instances.get(name)
+            if tool is None:
+                return {
+                    "ok": False,
+                    "result": None,
+                    "error": f"Tool '{name}' not found in tool_map or registered instances",
+                    "tool_name": name,
+                    "args": args,
+                    "duration_ms": 0.0,
+                    "step_index": 0,
+                    "validated": True,
+                    "needs_confirmation": needs_confirm,
+                }
+
+        # Execute
+        start = time.monotonic()
+        try:
+            if hasattr(tool, "ainvoke"):
+                raw_result = await tool.ainvoke(args)
+            elif hasattr(tool, "invoke"):
+                raw_result = tool.invoke(args)
+            else:
+                raw_result = tool(args)
+            duration = (time.monotonic() - start) * 1000
+            return {
+                "ok": True,
+                "result": raw_result,
+                "error": None,
+                "tool_name": name,
+                "args": args,
+                "duration_ms": round(duration, 1),
+                "step_index": 0,
+                "validated": True,
+                "needs_confirmation": needs_confirm,
+            }
+        except Exception as e:
+            duration = (time.monotonic() - start) * 1000
+            return {
+                "ok": False,
+                "result": None,
+                "error": str(e),
+                "tool_name": name,
+                "args": args,
+                "duration_ms": round(duration, 1),
+                "step_index": 0,
+                "validated": True,
+                "needs_confirmation": needs_confirm,
+            }
 
     # ── 工具列表（给前端的 API） ─────────────────────────
 

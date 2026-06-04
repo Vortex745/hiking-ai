@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from config import settings
-from rag.text_processing import clean_display_text
+from rag.text_processing import clean_display_text, emphasize_display_terms
 
 logger = logging.getLogger("ai-service.rag.augmenter")
 
@@ -18,7 +18,7 @@ _RAG_SYSTEM = """你是 AI Hiking 的中文知识助手。请按下面风格回�
 - 只根据文档能支持的信息回答，禁止补充文档外常识、编造细节或编造来源。
 - 正文不要写“根据文档”“知识库中说明”“资料显示”“检索内容提到”等元叙述。
 - 每个关键事实必须有文档支撑，但不要在正文里写 [1]、[2] 这类来源编号。
-- 不要使用 Markdown 加粗、标题、引用、代码块；输出干净的纯文本短句。
+- 最终回答使用自然中文，不要 Markdown 标题、引用或代码块；但对回答中的关键信息（如核心结论、重要数据、关键地名、时间节点、费用、安全警告等）使用 **加粗** 标记，每段回答加粗 2-5 处最关键的信息，不要过度加粗。
 - 短答案用 1-2 句；超过 2 个事实时用普通数字分点，每行一条，格式如“1. ...”。
 - 文档没说清的地方明确说不确定；如果证据不足，不要硬答。
 - 面向徒步场景时，给出可执行建议，避免空泛鼓励。"""
@@ -176,22 +176,29 @@ def _strip_leading_list_marker(text: str) -> str:
 
 
 def _format_answer_text(text: str) -> str:
-    cleaned = clean_display_text(text, preserve_lines=True, keep_list_markers=True)
+    cleaned = clean_display_text(
+        text,
+        preserve_lines=True,
+        keep_list_markers=True,
+        keep_markdown_emphasis=True,
+    )
     cleaned = _strip_answer_meta(cleaned)
     if not cleaned:
         return ""
 
     if _has_numbered_lines(cleaned):
-        return cleaned
+        return emphasize_display_terms(cleaned)
 
     normalized = " ".join(cleaned.split())
     sentences = _split_answer_sentences(normalized)
     if len(sentences) >= 3 or (len(normalized) >= 90 and len(sentences) >= 2):
         points = [_strip_leading_list_marker(sentence) for sentence in sentences]
         points = [point for point in points if point]
-        return "\n".join(f"{idx}. {sentence}" for idx, sentence in enumerate(points, start=1))
+        return emphasize_display_terms(
+            "\n".join(f"{idx}. {sentence}" for idx, sentence in enumerate(points, start=1))
+        )
 
-    return normalized
+    return emphasize_display_terms(normalized)
 
 
 def _fallback_answer(question: str, docs: list[Document]) -> str:
@@ -226,7 +233,7 @@ def _fallback_answer(question: str, docs: list[Document]) -> str:
     if not facts:
         facts = snippets
 
-    return "\n".join(f"{idx}. {fact}" for idx, fact in enumerate(facts, start=1))
+    return emphasize_display_terms("\n".join(f"{idx}. {fact}" for idx, fact in enumerate(facts, start=1)))
 
 
 def _terms_from_text(text: str) -> set[str]:

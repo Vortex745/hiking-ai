@@ -19,6 +19,7 @@ class MCPClient:
     def __init__(self):
         self.process: asyncio.subprocess.Process | None = None
         self.tools: dict[str, dict] = {}
+        self.initialized = False
 
     async def connect_stdio(self, command: str, args: list[str] | None = None):
         """Connect to an MCP server via stdio."""
@@ -59,10 +60,45 @@ class MCPClient:
         response = json.loads(line.decode())
         return response
 
+    async def _send_notification(self, method: str, params: dict | None = None) -> None:
+        """Send a JSON-RPC notification to the MCP server."""
+        if not self.process or not self.process.stdin:
+            raise ConnectionError("MCP server not connected")
+
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params is not None:
+            notification["params"] = params
+
+        write_result = self.process.stdin.write((json.dumps(notification) + "\n").encode())
+        if inspect.isawaitable(write_result):
+            await write_result
+        await self.process.stdin.drain()
+
+    async def initialize(self) -> dict:
+        """Perform the official MCP initialize lifecycle."""
+        response = await self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "ai-hiking",
+                    "version": "1.0.0",
+                },
+            },
+        )
+        result = response.get("result", {})
+        await self._send_notification("notifications/initialized")
+        self.initialized = True
+        return result
+
     async def list_tools(self) -> list[dict]:
         """List available tools from the MCP server."""
         try:
-            response = await self._send_request("list_tools")
+            response = await self._send_request("tools/list")
             tools = response.get("result", {}).get("tools", [])
             for t in tools:
                 self.tools[t["name"]] = t
@@ -74,11 +110,13 @@ class MCPClient:
     async def call_tool(self, tool_name: str, arguments: dict | None = None) -> Any:
         """Call a tool on the MCP server."""
         try:
-            response = await self._send_request("call_tool", {
+            response = await self._send_request("tools/call", {
                 "name": tool_name,
                 "arguments": arguments or {},
             })
             result = response.get("result", {})
+            if isinstance(result, dict) and result.get("isError"):
+                return result
             content = result.get("content", [])
             return content
         except Exception as e:

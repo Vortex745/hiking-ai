@@ -179,6 +179,39 @@ func TestChatHistoryProxiesToAIService(t *testing.T) {
 	}
 }
 
+func TestArtifactDownloadProxiesToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/api/v1/artifacts/reports/plan.pdf"
+		if r.URL.Path != expectedPath {
+			t.Errorf("expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/pdf")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("%PDF-1.4 demo"))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewChatHandler(aiService.URL)
+	router.GET("/api/v1/artifacts/*filePath", handler.ArtifactDownload)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts/reports/plan.pdf", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Header().Get("Content-Type") != "application/pdf" {
+		t.Errorf("expected application/pdf, got %s", rec.Header().Get("Content-Type"))
+	}
+	if rec.Body.String() != "%PDF-1.4 demo" {
+		t.Errorf("unexpected body: %s", rec.Body.String())
+	}
+}
+
 func TestChatHealthReturnsOk(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

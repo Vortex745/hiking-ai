@@ -141,13 +141,19 @@ function HikingRAG() {
       return null
     } catch { return null }
   })
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true)
+
+  useEffect(() => {
+    const handleToggle = () => setSidebarOpen(prev => !prev)
+    window.addEventListener('toggle-history', handleToggle)
+    return () => window.removeEventListener('toggle-history', handleToggle)
+  }, [])
+
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connected' | 'error'>('disconnected')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const chatIdRef = useRef(getOrCreateChatId())
 
   // Persist messages
@@ -412,46 +418,6 @@ function HikingRAG() {
     }
   }
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const formData = new FormData()
-    formData.append('file', file)
-    const runtimeModelSettings = buildRuntimeModelSettings()
-    if (Object.keys(runtimeModelSettings).length > 0) {
-      formData.append('model_settings', JSON.stringify(runtimeModelSettings))
-    }
-
-    try {
-      const resp = await fetch(API.ragUpload, { method: 'POST', body: formData })
-      if (resp.ok) {
-        const data = await resp.json()
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `已上传文档「${data.filename}」，共切分为 ${data.chunks} 个片段，可用于检索。`,
-          time: new Date().toTimeString().slice(0, 5),
-        }])
-        setConnectionStatus('connected')
-      } else {
-        const err = await resp.json()
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `[上传失败] ${err.detail || resp.statusText}`,
-          time: new Date().toTimeString().slice(0, 5),
-        }])
-      }
-    } catch {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: '[上传失败] 网络错误，请检查后端服务是否启动',
-        time: new Date().toTimeString().slice(0, 5),
-      }])
-    }
-    // Reset input so same file can be re-uploaded
-    e.target.value = ''
-  }
-
   const handleClear = () => {
     setMessages([])
     const oldChatId = chatIdRef.current
@@ -497,13 +463,6 @@ function HikingRAG() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="flex h-full w-full overflow-hidden relative">
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept=".txt,.md,.pdf,.docx"
-          onChange={handleFileUpload}
-        />
         {/* Floating Sidebar (Drawer) */}
         <FloatingSidebar
           isOpen={sidebarOpen}
@@ -521,7 +480,7 @@ function HikingRAG() {
           {!sidebarOpen && (
             <button
               onClick={() => setSidebarOpen(true)}
-              className="absolute top-6 left-6 z-40 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/80 hover:text-white hover:bg-black/50 transition-colors duration-150 ease-[var(--ease-out)] shadow-sm press-scale"
+              className="hidden md:flex absolute top-4 left-4 md:top-6 md:left-6 z-40 w-10 h-10 items-center justify-center rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/80 hover:text-white hover:bg-black/50 transition-colors duration-150 ease-[var(--ease-out)] shadow-sm press-scale"
               title="展开历史对话"
             >
               <Menu className="w-5 h-5" />
@@ -530,7 +489,6 @@ function HikingRAG() {
           <GeminiThread
             emptyTitle="徒步知识问答，有什么我可以帮您？"
             onRegenerate={handleRegenerate}
-            onUploadClick={() => fileInputRef.current?.click()}
             realMessageCount={messages.length}
           />
         </div>

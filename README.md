@@ -61,7 +61,7 @@ AI Hiking 将 React 前端、Go API Gateway 和 Python FastAPI AI Service 组合
 - Python 3.12
 - Go 1.22
 - 可选：`lark-cli`，用于 Feishu 同步
-- 可选：高德地图 API Key，用于地理和天气工具
+- 可选：高德地图 MCP Server，用于地理和天气工具
 - 生产可选：Vercel Marketplace Redis / Upstash，用于持久化聊天历史
 
 ### 克隆仓库
@@ -88,6 +88,9 @@ EMBEDDING_BASE_URL=https://api.openai.com/v1
 EMBEDDING_API_KEY=your-embedding-api-key
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSIONS=1536
+
+MCP_SERVERS={"amap":{"command":"amap-mcp","args":["--stdio"]}}
+MCP_CAPABILITY_MAP={"weather":{"server":"amap","tool":"weather"},"geocode":{"server":"amap","tool":"geocode"},"reverse_geocode":{"server":"amap","tool":"regeo"}}
 ```
 
 ### Docker Compose 启动
@@ -316,7 +319,8 @@ https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1
 配置：
 
 ```env
-AMAP_API_KEY=your-amap-key
+MCP_SERVERS={"amap":{"command":"amap-mcp","args":["--stdio"]}}
+MCP_CAPABILITY_MAP={"weather":{"server":"amap","tool":"weather"},"geocode":{"server":"amap","tool":"geocode"},"reverse_geocode":{"server":"amap","tool":"regeo"}}
 ```
 
 ### Feishu 同步不可用

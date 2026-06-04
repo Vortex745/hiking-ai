@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -81,6 +83,63 @@ func (h *ChatHandler) ChatHistory(c *gin.Context) {
 	chatID := c.Param("chatId")
 	url := fmt.Sprintf("%s/api/v1/chat/history/%s", h.aiServiceURL, chatID)
 	proxyRequest(c, http.MethodGet, url, nil)
+}
+
+// ArtifactDownload forwards generated workspace artifact downloads to the AI service.
+func (h *ChatHandler) ArtifactDownload(c *gin.Context) {
+	filePath := strings.TrimPrefix(c.Param("filePath"), "/")
+	if filePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file path is required"})
+		return
+	}
+
+	url := fmt.Sprintf("%s/api/v1/artifacts/%s", h.aiServiceURL, escapePathSegments(filePath))
+	proxyStreamResponse(c, http.MethodGet, url, nil)
+}
+
+func escapePathSegments(filePath string) string {
+	parts := strings.Split(filePath, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+// proxyStreamResponse streams the response body to the client without buffering.
+// Used for large responses like file downloads to avoid OOM on the gateway.
+func proxyStreamResponse(c *gin.Context, method, url string, body io.Reader) {
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, url, body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if contentType := c.Request.Header.Get("Content-Type"); contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI service unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			c.Writer.Header().Add(key, value)
+		}
+	}
+
+	c.Writer.WriteHeader(resp.StatusCode)
+
+	// Stream the body directly to the client
+	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+		// Client disconnected or write error — nothing we can do
+		return
+	}
 }
 
 func proxyRequest(c *gin.Context, method, url string, body io.Reader) {

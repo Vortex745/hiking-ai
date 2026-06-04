@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Search, Bot, ArrowRight } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { TextPlugin } from 'gsap/TextPlugin'
@@ -10,6 +10,7 @@ gsap.registerPlugin(useGSAP, TextPlugin)
 function Home() {
   const containerRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
+  const [videoReady, setVideoReady] = useState(false)
 
   useGSAP(() => {
     // 文字数量缩减然后再增加的无限循环打字机效果
@@ -29,14 +30,18 @@ function Home() {
   }, { scope: containerRef })
 
   return (
-    <div ref={containerRef} className="relative flex flex-col items-center justify-center min-h-screen bg-black overflow-hidden pt-20">
+    <div ref={containerRef} className="relative flex flex-col items-center justify-center min-h-screen bg-gray-950 overflow-hidden pt-20">
       {/* Background Video */}
       <video
         autoPlay
         loop
         muted
         playsInline
-        className="absolute inset-0 w-full h-full object-cover z-0"
+        preload="auto"
+        onPlaying={() => setVideoReady(true)}
+        className={`absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-700 ${
+          videoReady ? 'opacity-100' : 'opacity-0'
+        }`}
         src="/ascii-art.mp4"
       />
       {/* Dark overlay for text contrast */}

@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,12 +33,19 @@ class Settings:
     redis_rest_token: str = ""
     redis_rest_token_source: str = ""
     rag_docs_api_url: str = ""
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_default_space_id: str = ""
+    feishu_default_folder_token: str = ""
     memory_store_path: str = "./memory_store"
     memory_top_k: int = 5
     memory_compressor_model: str = "deepseek-v4-flash"
     memory_extractor_model: str = "deepseek-v4-flash"
     memory_enabled: bool = True
     amap_api_key: str = ""
+    mcp_servers: dict = {}
+    mcp_capability_map: dict = {}
+    disabled_lanes: str = ""  # Comma-separated lane names to disable, e.g. "SIMPLE_TOOL,WORKFLOW"
 
     def _default_runtime_dir(self, name: str) -> str:
         if os.getenv("VERCEL"):
@@ -50,6 +58,16 @@ class Settings:
             if value:
                 return value, name
         return "", ""
+
+    def _json_env(self, name: str) -> dict:
+        value = os.getenv(name, "").strip()
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     def load(self) -> "Settings":
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -87,12 +105,20 @@ class Settings:
             "KV_REST_API_TOKEN",
         )
         self.rag_docs_api_url = os.getenv("RAG_DOCS_API_URL", "")
+        self.feishu_app_id = os.getenv("FEISHU_APP_ID", "")
+        self.feishu_app_secret = os.getenv("FEISHU_APP_SECRET", "")
+        self.feishu_default_space_id = os.getenv("FEISHU_DEFAULT_SPACE_ID", "")
+        self.feishu_default_folder_token = os.getenv("FEISHU_DEFAULT_FOLDER_TOKEN", "")
         self.memory_store_path = os.getenv("MEMORY_STORE_PATH", self._default_runtime_dir("memory_store"))
         self.memory_top_k = int(os.getenv("MEMORY_TOP_K", "5"))
         self.memory_compressor_model = os.getenv("MEMORY_COMPRESSOR_MODEL", "deepseek-v4-flash")
         self.memory_extractor_model = os.getenv("MEMORY_EXTRACTOR_MODEL", "deepseek-v4-flash")
         self.memory_enabled = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
         self.amap_api_key = os.getenv("AMAP_API_KEY", "")
+        self.mcp_servers = self._json_env("MCP_SERVERS")
+        self.mcp_capability_map = self._json_env("MCP_CAPABILITY_MAP")
+        self.tavily_api_key = os.getenv("TAVILY_API_KEY", "")
+        self.disabled_lanes = os.getenv("DISABLED_LANES", "")
 
         return self
 
@@ -113,6 +139,14 @@ class Settings:
     @property
     def postgres_configured(self) -> bool:
         return self.database_url_source == "DATABASE_URL"
+
+    @property
+    def feishu_enabled(self) -> bool:
+        return bool(self.feishu_app_id and self.feishu_app_secret)
+
+    @property
+    def feishu_default_configured(self) -> bool:
+        return bool(self.feishu_default_space_id or self.feishu_default_folder_token)
 
 
 settings = Settings().load()

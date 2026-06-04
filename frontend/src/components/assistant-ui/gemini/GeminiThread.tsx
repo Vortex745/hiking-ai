@@ -5,7 +5,7 @@ import {
   MessagePrimitive,
   useMessage,
 } from "@assistant-ui/react";
-import { ArrowUp, RotateCw, Copy, Check, MoreHorizontal, Pin, PinOff, GripHorizontal, Paperclip } from 'lucide-react';
+import { ArrowUp, RotateCw, Copy, Check, MoreHorizontal, Pin, PinOff, GripHorizontal, Paperclip, Download } from 'lucide-react';
 import { getConversationMemoryProgress } from '../../../api/conversationMemory';
 import { useRef, useState, createContext, useContext, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import gsap from 'gsap';
@@ -36,7 +36,7 @@ export const GeminiThread = ({ emptyTitle, onRegenerate, onUploadClick, realMess
       </AuiIf>
       <AuiIf condition={(s) => !s.thread.isEmpty}>
         <div className="flex-1 overflow-hidden flex flex-col relative w-full">
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 md:px-8 pt-8 pb-32 scrollbar-thin">
+          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 md:px-8 pt-24 pb-32 scrollbar-thin">
             <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
           </ThreadPrimitive.Viewport>
           <div className="absolute bottom-0 left-0 right-0 pt-10 pb-4 bg-gradient-to-t from-[#fdfcfc] via-[#fdfcfc] dark:from-[#131314] dark:via-[#131314] to-transparent pointer-events-none">
@@ -64,7 +64,7 @@ const EmptyState = ({ emptyTitle, onUploadClick }: { emptyTitle: string; onUploa
 );
 
 const Composer = ({ onUploadClick }: { onUploadClick?: () => void }) => (
-  <ComposerPrimitive.Root className="flex flex-col rounded-3xl bg-white p-2.5 shadow-[0_2px_10px_-2px_rgba(0,0,0,0.18)] dark:bg-[#1e1f20] w-full max-w-[800px] mx-auto border border-black/5 dark:border-white/5">
+  <ComposerPrimitive.Root className="flex flex-col rounded-3xl bg-white p-2.5 shadow-[0_2px_10px_-2px_rgba(0,0,0,0.18)] dark:bg-[#1e1f20] w-[calc(100%-2rem)] md:w-full max-w-[800px] mx-auto border border-black/5 dark:border-white/5">
     <div className="flex items-end gap-2 px-2">
       {onUploadClick && (
         <button
@@ -106,13 +106,112 @@ const sourceLabel = (source: string) => {
   return source
 }
 
+const formatArtifactSize = (value: unknown) => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return ''
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+const MARKDOWN_BOLD_PATTERN = /(\*\*(?=\S)[\s\S]*?\S\*\*)/g;
+
 const MarkdownText = (part: any) => {
+  const raw = part.text || part.part?.text || '';
+  // Split on **bold** patterns and render <strong> for matched segments
+  const segments = raw.split(MARKDOWN_BOLD_PATTERN);
   return (
     <div className="whitespace-pre-wrap leading-relaxed relative">
-      {part.text || part.part?.text}
+      {segments.map((seg: string, i: number) =>
+        seg.startsWith('**') && seg.endsWith('**') ? (
+          <strong key={i} className="font-bold">{seg.slice(2, -2)}</strong>
+        ) : (
+          <span key={i}>{seg}</span>
+        )
+      )}
     </div>
   );
 };
+
+/** Resolve a relative download_url against the configured API base URL */
+function resolveDownloadUrl(downloadUrl: string): string {
+  if (!downloadUrl) return '';
+  // Already a full URL — return as-is
+  if (downloadUrl.startsWith('http://') || downloadUrl.startsWith('https://')) return downloadUrl;
+
+  // Check for a configured API base URL (e.g. https://api.example.com/api/v1)
+  const configuredApiBase = import.meta.env?.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
+
+  if (configuredApiBase) {
+    // download_url is like /api/v1/artifacts/xxx.pdf
+    // Replace the /api/v1 prefix with the configured full URL
+    const apiBase = '/api/v1';
+    if (downloadUrl.startsWith(apiBase)) {
+      return configuredApiBase + downloadUrl.slice(apiBase.length);
+    }
+    return configuredApiBase + (downloadUrl.startsWith('/') ? '' : '/') + downloadUrl;
+  }
+
+  // No VITE_API_BASE_URL configured — relative path works via same-origin Gateway
+  return downloadUrl;
+}
+
+const ArtifactList = ({ artifacts }: { artifacts: any[] }) => {
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const handleDownload = async (rawUrl: string, filename: string) => {
+    const url = resolveDownloadUrl(rawUrl);
+    setDownloading(filename);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`下载失败：${response.status} ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '下载失败，请稍后重试');
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <div className="mt-3 border-t border-border/40 pt-3 space-y-2">
+      {artifacts.map((artifact, i) => {
+        const metadata = artifact?.metadata || {};
+        const downloadUrl = typeof metadata.download_url === 'string' ? metadata.download_url : '';
+        const filename = typeof metadata.filename === 'string' ? metadata.filename : '下载文件';
+        const size = formatArtifactSize(metadata.size_bytes);
+        const isDownloading = downloading === filename;
+        return (
+          <div key={i} className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+            {downloadUrl ? (
+              <button
+                type="button"
+                onClick={() => handleDownload(downloadUrl, filename)}
+                disabled={isDownloading}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 py-1.5 font-medium text-text-primary transition-colors hover:border-primary/60 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className={`size-4${isDownloading ? ' animate-pulse' : ''}`} aria-hidden="true" />
+                <span>{isDownloading ? '下载中…' : `下载 ${filename}`}</span>
+              </button>
+            ) : (
+              <span className="leading-relaxed">{artifact.content}</span>
+            )}
+            {downloadUrl && size && <span className="text-[12px] opacity-70">{size}</span>}
+          </div>
+        )
+      })}
+    </div>
+  );
+}
 
 const CustomToolCall = (part: any) => {
   const toolName = part.toolName || part.part?.toolName;
@@ -123,22 +222,33 @@ const CustomToolCall = (part: any) => {
   }
   
   if (toolName === "traceEvents") {
-    return null;
+    const traceEvents = args as any[];
+    if (!traceEvents || traceEvents.length === 0) return null;
+    return (
+      <details className="mt-4 border-t border-border/40 pt-3 text-[13px] text-text-secondary">
+        <summary className="cursor-pointer select-none font-medium text-text-primary outline-none">
+          思考流程信息 · {traceEvents.length} 个步骤
+        </summary>
+        <div className="mt-3 max-h-[300px] overflow-y-auto space-y-3 opacity-90 pr-2 scrollbar-thin">
+          {traceEvents.map((event: any, idx: number) => (
+            <div key={idx} className="border-l-2 border-primary/25 pl-3">
+              <div className="font-medium text-text-primary">
+                {idx + 1}. {traceLabels[event?.type] || event?.type || '事件'}
+              </div>
+              {event?.content && (
+                <div className="mt-1.5 whitespace-pre-wrap text-text-secondary">
+                  {event.content}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </details>
+    );
   }
 
   if (toolName === "artifacts") {
-    const artifacts = args as any[];
-    if (!artifacts || artifacts.length === 0) return null;
-    return (
-      <div className="mt-3 border-t border-border/40 pt-3">
-        {artifacts.map((artifact, i) => (
-          <div key={i} className="flex items-start gap-2 text-[13px] text-text-secondary mb-2 last:mb-0">
-             <span className="shrink-0 mt-0.5 opacity-70">📋</span>
-             <span className="leading-relaxed">{artifact.content}</span>
-          </div>
-        ))}
-      </div>
-    );
+    return null;
   }
 
   if (part.toolName === "searchSummary") {
@@ -339,7 +449,7 @@ function buildLifecycle(content: readonly any[], isRunning: boolean) {
     return {
       title: 'Agent 技术生命周期',
       steps: getAgentLifecycle(traceEvents, isRunning, hasText),
-      recentEvents: traceEvents.slice(-4).map(event => ({
+      recentEvents: traceEvents.map(event => ({
         label: traceLabels[event?.type] || event?.type || '事件',
         content: String(event?.content || '').trim(),
       })).filter(event => event.content),
@@ -385,17 +495,13 @@ function clampLifecyclePosition(position: LifecyclePosition): LifecyclePosition 
   };
 }
 
-function AiThinking({ text = '思考中' }: { text?: string }) {
+function AiThinking({ text = '模型思考中' }: { text?: string }) {
   return (
     <div className="ai-thinking mt-1" role="status" aria-label="AI 正在思考">
-      <span className="ai-thinking-core">
-        <span />
-        <span />
-        <span />
-      </span>
-      <span className="ai-thinking-line" />
       <span className="ai-thinking-label">
-        <span key={text} className="ai-thinking-text-scroll">{text}</span>
+        <span key={text} className="font-medium bg-gradient-to-r from-[#a3a3a3] via-[#111] to-[#a3a3a3] dark:from-[#5f6368] dark:via-[#ffffff] dark:to-[#5f6368] bg-[length:200%_auto] bg-clip-text text-transparent animate-shimmer">
+          {text}
+        </span>
       </span>
     </div>
   );
@@ -419,20 +525,33 @@ const LifecycleHoverPanel = ({
   onDragStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) => {
   const lifecycle = buildLifecycle(content, isRunning);
+  const [activeItem, setActiveItem] = useState<{type: 'step' | 'event', index: number} | null>(null);
+  const [sliderIndex, setSliderIndex] = useState(lifecycle.recentEvents.length - 1);
+  const [userDragging, setUserDragging] = useState(false);
+  const prevEventCountRef = useRef(lifecycle.recentEvents.length);
+
+  // Auto-advance slider to latest event when new events arrive (unless user is dragging)
+  useEffect(() => {
+    const count = lifecycle.recentEvents.length;
+    if (count > prevEventCountRef.current && !userDragging) {
+      setSliderIndex(count - 1);
+    }
+    prevEventCountRef.current = count;
+  }, [lifecycle.recentEvents.length, userDragging]);
 
   return (
     <div
       ref={panelRef}
-      className={`z-50 w-[330px] rounded-2xl border border-black/10 bg-white/95 p-4 text-left shadow-[0_16px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl dark:border-white/10 dark:bg-[#1e1f20]/95 ${
+      className={`z-50 flex w-[240px] flex-col overflow-visible rounded-2xl border border-black/10 bg-white/95 p-4 text-left shadow-[0_16px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl dark:border-white/10 dark:bg-[#1e1f20]/95 ${
         pinned
-          ? 'fixed left-0 top-0 max-h-[72vh] overflow-y-auto will-change-transform'
+          ? 'fixed left-0 top-0 max-h-[72vh] will-change-transform'
           : 'absolute bottom-full left-1/2 mb-2 -translate-x-1/2'
       }`}
       style={pinned ? { transform: `translate3d(${position.x}px, ${position.y}px, 0)` } : undefined}
       data-lifecycle-panel={pinned ? 'pinned' : 'hover'}
     >
       <div
-        className={`mb-3 flex items-center justify-between gap-3 ${pinned ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        className={`mb-3 flex shrink-0 items-center justify-between gap-3 ${pinned ? 'cursor-grab active:cursor-grabbing' : ''}`}
         onPointerDown={onDragStart}
       >
         <div className="min-w-0 text-[13px] font-medium text-[#1f1f1f] dark:text-[#e3e3e3]">
@@ -459,11 +578,15 @@ const LifecycleHoverPanel = ({
           </button>
         </div>
       </div>
-      <div className="space-y-2.5">
+      <div className="shrink-0 space-y-1" onMouseLeave={() => setActiveItem(null)}>
         {lifecycle.steps.map((step, index) => (
-          <div key={`${step.title}-${index}`} className="grid grid-cols-[18px_1fr] gap-2">
+          <div
+            key={`${step.title}-${index}`}
+            className="flex items-center gap-2 p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded cursor-pointer transition-colors"
+            onMouseEnter={() => setActiveItem({type: 'step', index})}
+          >
             <span
-              className={`mt-1 h-2.5 w-2.5 rounded-full ${
+              className={`h-2.5 w-2.5 rounded-full shrink-0 ${
                 step.state === 'complete'
                   ? 'bg-[#0b57d0]'
                   : step.state === 'active'
@@ -471,28 +594,75 @@ const LifecycleHoverPanel = ({
                     : 'bg-black/15 dark:bg-white/20'
               }`}
             />
-            <span>
-              <span className="block text-[12px] font-medium text-[#1f1f1f] dark:text-[#e3e3e3]">
-                {step.title}
-              </span>
-              <span className="block text-[11px] leading-snug text-[#5f6368] dark:text-[#bdc1c6]">
-                {step.detail}
-              </span>
+            <span className="text-[12px] font-medium text-[#1f1f1f] dark:text-[#e3e3e3]">
+              {step.title}
             </span>
           </div>
         ))}
       </div>
-      {lifecycle.recentEvents.length > 0 && (
-        <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/10">
-          <div className="mb-2 text-[11px] font-medium text-[#5f6368] dark:text-[#bdc1c6]">最近事件</div>
-          <div className="space-y-1.5">
-            {lifecycle.recentEvents.map((event, index) => (
-              <div key={`${event.label}-${index}`} className="text-[11px] leading-snug text-[#444746] dark:text-[#c4c7c5]">
-                <span className="font-medium text-[#1f1f1f] dark:text-[#e3e3e3]">{event.label}：</span>
-                {event.content}
+      {lifecycle.recentEvents.length > 0 && (() => {
+        const maxIdx = lifecycle.recentEvents.length - 1;
+        const safeIdx = Math.min(Math.max(sliderIndex, 0), maxIdx);
+        const currentEvent = lifecycle.recentEvents[safeIdx];
+        return (
+          <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-black/10 pt-2 dark:border-white/10">
+            <div className="mb-1.5 shrink-0 flex items-center justify-between px-1.5">
+              <span className="text-[11px] font-medium text-[#5f6368] dark:text-[#bdc1c6]">事件流程</span>
+              <span className="text-[10px] tabular-nums text-[#5f6368] dark:text-[#bdc1c6] opacity-70">{safeIdx + 1} / {lifecycle.recentEvents.length}</span>
+            </div>
+            {/* Slider */}
+            <div className="px-1.5 mb-2">
+              <input
+                type="range"
+                min={0}
+                max={maxIdx}
+                value={safeIdx}
+                onChange={(e) => { setSliderIndex(Number(e.target.value)); setUserDragging(true); }}
+                onMouseUp={() => setUserDragging(false)}
+                onTouchEnd={() => setUserDragging(false)}
+                className="lifecycle-slider w-full"
+                aria-label="浏览事件"
+              />
+            </div>
+            {/* Current event card */}
+            {currentEvent && (
+              <div
+                className="mx-1.5 rounded-lg bg-black/[0.03] dark:bg-white/[0.05] p-2.5 transition-all duration-150"
+                onMouseEnter={() => setActiveItem({type: 'event', index: safeIdx})}
+                onMouseLeave={() => setActiveItem(null)}
+              >
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                    safeIdx === maxIdx ? 'bg-[#0b57d0] animate-pulse' : 'bg-[#0b57d0]/60'
+                  }`} />
+                  <span className="text-[12px] font-medium text-[#1f1f1f] dark:text-[#e3e3e3]">{currentEvent.label}</span>
+                </div>
+                <div className="text-[11px] leading-relaxed text-[#444746] dark:text-[#c4c7c5] whitespace-pre-wrap break-all line-clamp-4">
+                  {currentEvent.content}
+                </div>
               </div>
-            ))}
+            )}
           </div>
+        );
+      })()}
+
+      {/* Right Side Detail Panel */}
+      {activeItem && (
+        <div
+          className="absolute left-full top-1/2 -translate-y-1/2 ml-2 w-[260px] z-50 flex flex-col rounded-xl border border-black/10 bg-white/95 p-4 text-left shadow-[0_8px_30px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-[#1e1f20]/95 pointer-events-none"
+        >
+          {activeItem.type === 'step' && (
+            <>
+               <div className="font-medium text-[13px] text-[#1f1f1f] dark:text-[#e3e3e3] mb-1.5">{lifecycle.steps[activeItem.index].title}</div>
+               <div className="text-[12px] leading-snug text-[#5f6368] dark:text-[#bdc1c6]">{lifecycle.steps[activeItem.index].detail}</div>
+            </>
+          )}
+          {activeItem.type === 'event' && (
+             <>
+               <div className="font-medium text-[13px] text-[#1f1f1f] dark:text-[#e3e3e3] mb-1.5">{lifecycle.recentEvents[activeItem.index].label}</div>
+               <div className="text-[12px] leading-snug text-[#444746] dark:text-[#c4c7c5] whitespace-pre-wrap break-all">{lifecycle.recentEvents[activeItem.index].content}</div>
+             </>
+          )}
         </div>
       )}
     </div>
@@ -515,18 +685,17 @@ const ChatMessage = () => {
   const messageContent = useMessage((state) => state.content) as any[] || [];
   const messageRole = useMessage((state) => state.role);
   const messageStatusType = useMessage((state) => state.status?.type);
+  const artifactArgs = getToolArgs(messageContent, "artifacts");
+  const messageArtifacts = Array.isArray(artifactArgs) ? artifactArgs : [];
   const isMessageRunning = messageStatusType === 'running';
   const isAssistantThinking = messageRole === 'assistant'
     && isMessageRunning
     && getMessageText(messageContent).trim().length === 0;
 
-  let thinkingText = '思考中';
+  let thinkingText = '模型思考中';
   if (isAssistantThinking) {
     const lifecycle = buildLifecycle(messageContent, isMessageRunning);
-    const activeStep = lifecycle.steps.find(s => s.state === 'active');
-    if (activeStep) {
-      thinkingText = activeStep.title;
-    }
+    // keep lifecycle evaluation if needed for other side effects, but text is fixed
   }
 
   useEffect(() => {
@@ -667,6 +836,7 @@ const ChatMessage = () => {
           <div className="flex flex-col items-start w-full group">
             <div className="max-w-full text-[15px] text-[#1f1f1f] dark:text-[#e3e3e3] leading-relaxed break-words">
               <MessagePrimitive.Parts components={{ Text: MarkdownText, ToolCall: CustomToolCall } as any} />
+              {messageArtifacts.length > 0 && <ArtifactList artifacts={messageArtifacts} />}
               {isAssistantThinking && <AiThinking text={thinkingText} />}
             </div>
             

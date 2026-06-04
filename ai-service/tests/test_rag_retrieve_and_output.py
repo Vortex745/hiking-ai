@@ -338,6 +338,189 @@ def test_rag_query_syncs_cloud_docs_when_configured(monkeypatch):
     assert "雷雨天气不要进入裸露山脊" in body
 
 
+def test_rag_query_syncs_feishu_link_before_retrieval(monkeypatch):
+    """A Feishu link in the question should be synced into the immediate RAG answer."""
+
+    from api import rag as rag_api
+
+    seen = {}
+
+    class FakeRetriever:
+        storage_mode = "memory"
+
+        def add_documents(self, docs, status=None):
+            seen["added_docs"] = docs
+            seen["added_status"] = status
+
+        def hybrid_search(self, queries, k=4, status_filter=None):
+            return []
+
+    class FakeLoader:
+        def load_and_split(self, raw, doc_type="docx"):
+            seen["link"] = raw
+            seen["doc_type"] = doc_type
+            return [
+                Document(
+                    page_content="营地要平坦、避风，距离水源60到200米，避开低洼地和枯树。",
+                    metadata={"source": "feishu", "title": "营地选择指南"},
+                )
+            ]
+
+    class FakeRewriter:
+        def rewrite(self, question):
+            return [question]
+
+        def humanize_for_answer(self, question):
+            return "这篇飞书文档讲了什么？"
+
+    class FakeReranker:
+        @property
+        def enabled(self):
+            return False
+
+    class FakeAugmenter:
+        def augment(self, question, docs):
+            seen["augmented_docs"] = docs
+            return f"已读取飞书：{docs[0].page_content}"
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(rag_api.settings, "rag_docs_api_url", "")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_id", "app-id")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_secret", "app-secret")
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_api, "FeishuDocLoader", FakeLoader)
+    monkeypatch.setattr(rag_api, "QueryRewriter", FakeRewriter)
+    monkeypatch.setattr(rag_api, "Reranker", FakeReranker)
+    monkeypatch.setattr(rag_api, "ContextAugmenter", FakeAugmenter)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+    question = "阅读这篇文章告诉我内容 https://example.feishu.cn/docx/UHfYdYAuPoZDo8xxeOOc9g2Znpd"
+
+    with client.stream("POST", "/api/v1/rag/query", json={"question": question}) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert seen["link"].endswith("UHfYdYAuPoZDo8xxeOOc9g2Znpd")
+    assert seen["doc_type"] == "docx"
+    assert seen["added_status"] == "feishu"
+    assert seen["augmented_docs"][0].metadata["title"] == "营地选择指南"
+    assert "检测到飞书链接" in body
+    assert "已同步飞书文档" in body
+    assert "营地要平坦、避风" in body
+
+
+def test_rag_query_stops_when_feishu_link_sync_fails(monkeypatch):
+    """Failed Feishu link sync should not be answered with unrelated knowledge docs."""
+
+    from api import rag as rag_api
+
+    class FakeRetriever:
+        storage_mode = "memory"
+
+    class FakeLoader:
+        def load_and_split(self, raw, doc_type="docx"):
+            raise RuntimeError("permission denied")
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("RAG generation should not run after Feishu sync failure")
+
+    monkeypatch.setattr(rag_api.settings, "rag_docs_api_url", "")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_id", "app-id")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_secret", "app-secret")
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_api, "FeishuDocLoader", FakeLoader)
+    monkeypatch.setattr(rag_api, "QueryRewriter", fail_if_called)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+    question = "阅读这篇文章告诉我内容 https://example.feishu.cn/docx/UHfYdYAuPoZDo8xxeOOc9g2Znpd"
+
+    with client.stream("POST", "/api/v1/rag/query", json={"question": question}) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert "检测到飞书链接" in body
+    assert "没有同步到可检索的文档内容" in body
+    assert "调用查询改写模块" not in body
+
+
+def test_rag_query_syncs_default_feishu_when_index_is_empty(monkeypatch):
+    """Default Feishu knowledge should be synced when configured and the index is empty."""
+
+    from api import rag as rag_api
+
+    seen = {}
+
+    class FakeRetriever:
+        storage_mode = "memory"
+
+        def document_count(self):
+            return 0
+
+        def hybrid_search(self, queries, k=4, status_filter=None):
+            return []
+
+    class FakeDefaultSyncer:
+        def __init__(self, loader, retriever):
+            self.synced_documents = []
+
+        def sync_from_space(self, space_id):
+            seen["space_id"] = space_id
+            self.synced_documents = [
+                Document(
+                    page_content="默认知识库：营地应远离河谷、悬崖和孤树。",
+                    metadata={"source": "feishu", "title": "默认营地指南"},
+                )
+            ]
+            return [{"token": "doc-token", "title": "默认营地指南", "chunks": 1}]
+
+    class FakeRewriter:
+        def rewrite(self, question):
+            return [question]
+
+    class FakeReranker:
+        @property
+        def enabled(self):
+            return False
+
+    class FakeAugmenter:
+        def augment(self, question, docs):
+            seen["augmented_docs"] = docs
+            return docs[0].page_content
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(rag_api.settings, "rag_docs_api_url", "")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_id", "app-id")
+    monkeypatch.setattr(rag_api.settings, "feishu_app_secret", "app-secret")
+    monkeypatch.setattr(rag_api.settings, "feishu_default_space_id", "space-1")
+    monkeypatch.setattr(rag_api.settings, "feishu_default_folder_token", "")
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_api, "FeishuDefaultSyncer", FakeDefaultSyncer)
+    monkeypatch.setattr(rag_api, "QueryRewriter", FakeRewriter)
+    monkeypatch.setattr(rag_api, "Reranker", FakeReranker)
+    monkeypatch.setattr(rag_api, "ContextAugmenter", FakeAugmenter)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+
+    with client.stream("POST", "/api/v1/rag/query", json={"question": "营地选择注意什么"}) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert seen["space_id"] == "space-1"
+    assert seen["augmented_docs"][0].metadata["title"] == "默认营地指南"
+    assert "知识库为空，正在同步默认飞书知识库" in body
+    assert "默认知识库：营地应远离河谷" in body
+
+
 def test_rag_irrelevant_retrieval_is_treated_as_no_match(monkeypatch):
     """If retrieval returns weak evidence, RAG should not answer from unrelated docs."""
 

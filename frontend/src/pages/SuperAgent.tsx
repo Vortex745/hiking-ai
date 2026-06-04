@@ -197,7 +197,14 @@ function SuperAgent() {
       return null
     } catch { return null }
   })
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true)
+
+  useEffect(() => {
+    const handleToggle = () => setSidebarOpen(prev => !prev)
+    window.addEventListener('toggle-history', handleToggle)
+    return () => window.removeEventListener('toggle-history', handleToggle)
+  }, [])
+
   const [input, setInput] = useState('')
   const [selectedScenario, setSelectedScenario] = useState<AgentScenario | null>(null)
   const [isSending, setIsSending] = useState(false)
@@ -574,7 +581,7 @@ function SuperAgent() {
           {!sidebarOpen && (
             <button
               onClick={() => setSidebarOpen(true)}
-              className="absolute top-6 left-6 z-40 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/80 hover:text-white hover:bg-black/50 transition-colors duration-150 ease-[var(--ease-out)] shadow-sm press-scale"
+              className="hidden md:flex absolute top-6 left-6 z-40 w-10 h-10 items-center justify-center rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/80 hover:text-white hover:bg-black/50 transition-colors duration-150 ease-[var(--ease-out)] shadow-sm press-scale"
               title="展开历史对话"
             >
               <Menu className="w-5 h-5" />

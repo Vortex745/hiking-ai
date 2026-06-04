@@ -53,6 +53,32 @@ workspace/
 .firecrawl/
 .sisyphus/
 rag_docs/
+ai-service/memory_data/
+ai-service/memory_store/
+ai-service/test_memory_store/
+ai-service/workspace/
+ai-service/rag_docs/
+
+# ============================================================
+# Non-essential Runtime / Verification Artifacts
+# ============================================================
+test-report/
+test-screenshots/
+playwright-report/
+coverage/
+*.heapsnapshot
+*-local.log
+*-local.err.log
+frontend-vite.log
+frontend-vite.err.log
+ai-service/*-local.log
+ai-service/*-local.err.log
+ai-service/vercel-ai-runtime.log
+agent-monitor-*.png
+verification-*.png
+repo-context.md
+handoff-*.md
+progress.md
 
 # ============================================================
 # OMC / Claude Tooling

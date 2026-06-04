@@ -9,6 +9,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from mcp.client import MCPClient
+from mcp.runtime import MCPRuntime
 
 
 # ── 连接测试 ────────────────────────────────────────────────────────
@@ -75,6 +76,32 @@ async def test_send_request_sends_json_rpc_and_returns_response():
 
 
 @pytest.mark.asyncio
+async def test_initialize_uses_official_mcp_lifecycle():
+    """MCP client should initialize with the official lifecycle before tool calls."""
+    c = MCPClient()
+    requests = []
+    notifications = []
+
+    async def fake_send_request(method, params=None):
+        requests.append((method, params))
+        return {"result": {"protocolVersion": "2025-06-18", "capabilities": {}}}
+
+    async def fake_send_notification(method, params=None):
+        notifications.append((method, params))
+
+    c._send_request = fake_send_request
+    c._send_notification = fake_send_notification
+
+    result = await c.initialize()
+
+    assert result["protocolVersion"] == "2025-06-18"
+    assert requests[0][0] == "initialize"
+    assert requests[0][1]["clientInfo"]["name"] == "ai-hiking"
+    assert notifications == [("notifications/initialized", None)]
+    assert c.initialized is True
+
+
+@pytest.mark.asyncio
 async def test_send_request_not_connected():
     """测试 _send_request 在未连接时抛出 ConnectionError"""
     c = MCPClient()
@@ -123,7 +150,7 @@ async def test_list_tools_returns_tools_and_caches():
         # 检查缓存
         assert c.tools["web_search"]["name"] == "web_search"
         assert c.tools["calculator"]["name"] == "calculator"
-        c._send_request.assert_awaited_once_with("list_tools")
+        c._send_request.assert_awaited_once_with("tools/list")
 
 
 @pytest.mark.asyncio
@@ -153,9 +180,26 @@ async def test_call_tool_calls_mcp_and_returns_content():
 
         assert result == expected_content
         c._send_request.assert_awaited_once_with(
-            "call_tool",
+            "tools/call",
             {"name": "calculator", "arguments": {"expression": "6*7"}},
         )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_preserves_official_error_result():
+    """Official MCP tool errors should not be flattened into successful content."""
+    error_result = {
+        "isError": True,
+        "content": [{"type": "text", "text": "weather unavailable"}],
+    }
+
+    c = MCPClient()
+    with patch.object(c, "_send_request", new=AsyncMock(return_value={
+        "result": error_result
+    })):
+        result = await c.call_tool("weather", {"city": "北京"})
+
+    assert result == error_result
 
 
 @pytest.mark.asyncio
@@ -237,6 +281,44 @@ async def test_load_tools_from_config_namespaces_loaded_tools():
 
     assert len(tools) == 1
     assert tools[0].name == "mcp:image:image_search"
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_keeps_client_and_calls_loaded_tool():
+    calls = []
+
+    async def fake_connect(self, command, args=None):
+        calls.append(("connect", command, args))
+        self.process = MagicMock()
+
+    async def fake_initialize(self):
+        calls.append(("initialize",))
+        self.initialized = True
+        return {}
+
+    async def fake_list_tools(self):
+        calls.append(("list_tools",))
+        return [{"name": "weather", "description": "Weather", "inputSchema": {}}]
+
+    async def fake_call_tool(self, tool_name, arguments=None):
+        calls.append(("call_tool", tool_name, arguments))
+        return [{"type": "text", "text": "晴"}]
+
+    with patch.object(MCPClient, "connect_stdio", new=fake_connect), \
+        patch.object(MCPClient, "initialize", new=fake_initialize), \
+        patch.object(MCPClient, "list_tools", new=fake_list_tools), \
+        patch.object(MCPClient, "call_tool", new=fake_call_tool):
+        runtime = MCPRuntime({"amap": {"command": "amap-mcp", "args": ["--stdio"]}})
+        result = await runtime.call_tool("amap", "weather", {"city": "北京"})
+
+    assert result == [{"type": "text", "text": "晴"}]
+    assert runtime.health()["loaded"] is True
+    assert calls == [
+        ("connect", "amap-mcp", ["--stdio"]),
+        ("initialize",),
+        ("list_tools",),
+        ("call_tool", "weather", {"city": "北京"}),
+    ]
 
 
 # ── close ──────────────────────────────────────────────────────────

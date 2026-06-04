@@ -4,19 +4,20 @@ import logging
 import re
 from typing import Any, AsyncGenerator
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 
 from agent.intake import AgentIntent, AgentRequestContext, CurrentLocation, understand_request
+from agent.hiking_manus import HikingManus
 from agent.prompts import NEXT_STEP_PROMPT, SYSTEM_PROMPT
+from agent.react_guard import RepeatCallDetector, StuckDetector
+from agent.runtime import AgentRunRecord, AgentState, ExecutionLane, ExitReason
 from agent.task_exit import AgentTaskExitController
 from api.models import RuntimeLlmConfig
 from config import settings
 from memory import MemoryManager
-from rag.rewriter import QueryRewriter
-from rag.text_processing import clean_display_text
+from rag.text_processing import clean_display_text, emphasize_display_terms
 from tools.file_operation import file_operation
 from tools.hiking_domain import (
     gear_checklist,
@@ -38,7 +39,7 @@ from tools.web_search import web_search
 
 logger = logging.getLogger("ai-service.agent")
 
-MAX_STEPS = 6
+MAX_STEPS = 20
 MAX_EVENT_CHARS = 1200
 MAX_ARGS_CHARS = 500
 ROUTE_RECOMMENDATION_PROMPT = "要不要我继续给你推荐附近的户外徒步路线？"
@@ -61,13 +62,20 @@ AFFIRMATIVE_ROUTE_FOLLOWUP = (
 )
 
 
-BASE_TOOL_NAMES = [
+OPENMANUS_TOOL_NAMES = [
     "web_search",
     "web_scraping",
     "file_operation",
     "resource_download",
     "terminal",
     "generate_pdf",
+    "weather_lookup",
+    "geo_lookup",
+    "route_research",
+    "hiking_knowledge_search",
+    "gear_checklist",
+    "risk_assessment",
+    "trip_report_export",
     "terminate",
 ]
 
@@ -88,51 +96,46 @@ AVAILABLE_TOOL_MAP = {
     "trip_report_export": trip_report_export,
 }
 
-AVAILABLE_TOOLS = [AVAILABLE_TOOL_MAP[name] for name in BASE_TOOL_NAMES]
+AVAILABLE_TOOLS = [AVAILABLE_TOOL_MAP[name] for name in OPENMANUS_TOOL_NAMES]
 
-INTENT_TOOL_NAMES: dict[AgentIntent, list[str]] = {
-    AgentIntent.KNOWLEDGE_QA: [
-        "hiking_knowledge_search",
-        "terminate",
-    ],
+INTENT_TOOL_NAMES = {
     AgentIntent.ROUTE_PLAN: [
         "weather_lookup",
         "geo_lookup",
         "route_research",
-        "hiking_knowledge_search",
         "gear_checklist",
         "risk_assessment",
-        "terminate",
-    ],
-    AgentIntent.GEAR_CHECK: [
         "hiking_knowledge_search",
-        "gear_checklist",
-        "risk_assessment",
         "terminate",
     ],
     AgentIntent.RISK_ASSESSMENT: [
         "weather_lookup",
         "geo_lookup",
         "route_research",
-        "hiking_knowledge_search",
         "risk_assessment",
+        "gear_checklist",
+        "hiking_knowledge_search",
         "terminate",
     ],
-    AgentIntent.REPORT_EXPORT: [
+    AgentIntent.GEAR_CHECK: [
+        "weather_lookup",
         "route_research",
+        "gear_checklist",
+        "risk_assessment",
         "hiking_knowledge_search",
+        "terminate",
+    ],
+    AgentIntent.KNOWLEDGE_QA: ["hiking_knowledge_search", "terminate"],
+    AgentIntent.REPORT_EXPORT: [
+        "weather_lookup",
+        "route_research",
         "gear_checklist",
         "risk_assessment",
         "trip_report_export",
         "generate_pdf",
-        "file_operation",
         "terminate",
     ],
-    AgentIntent.GENERAL_CHAT: [
-        "web_search",
-        "web_scraping",
-        "terminate",
-    ],
+    AgentIntent.GENERAL_CHAT: ["web_search", "web_scraping", "terminate"],
 }
 
 
@@ -146,45 +149,12 @@ def _unique_tool_names(names: list[str]) -> list[str]:
     return result
 
 
-def _prefetched_tool_names(context: AgentRequestContext) -> set[str]:
-    names: set[str] = set()
-    for item in context.prefetched_tool_results:
-        tool = item.get("tool") if isinstance(item, dict) else None
-        if tool:
-            names.add(str(tool))
-    return names
-
-
-def select_tools_for_context(context: AgentRequestContext) -> list:
-    """Return the small tool set visible to the model for one request."""
-    if context.needs_clarification and context.intent in {
-        AgentIntent.ROUTE_PLAN,
-        AgentIntent.RISK_ASSESSMENT,
-    }:
-        tool_names = ["terminate"]
-    elif context.intent == AgentIntent.GENERAL_CHAT:
-        tool_names = ["terminate"]
-    elif (
-        context.intent == AgentIntent.RISK_ASSESSMENT
-        and {"geo_lookup", "weather_lookup"}.issubset(_prefetched_tool_names(context))
-    ):
-        tool_names = ["risk_assessment", "terminate"]
-    else:
-        tool_names = INTENT_TOOL_NAMES.get(context.intent, INTENT_TOOL_NAMES[AgentIntent.GENERAL_CHAT])
-    return [AVAILABLE_TOOL_MAP[name] for name in _unique_tool_names(tool_names)]
-
-
 def validate_tool_configuration() -> dict[str, Any]:
-    """Validate local tool implementation, registry, risk map, and intent routing."""
+    """Validate the HikingManus tool surface, registry, and risk map."""
     available_names = set(AVAILABLE_TOOL_MAP)
     registered_names = {md.name for md in tool_registry.list_all_tools()}
     risk_names = set(TOOL_RISK_MAP)
-    intent_names = {
-        name
-        for names in INTENT_TOOL_NAMES.values()
-        for name in names
-    }
-    base_names = set(BASE_TOOL_NAMES)
+    openmanus_names = set(OPENMANUS_TOOL_NAMES)
 
     issues: list[dict[str, Any]] = []
 
@@ -195,8 +165,8 @@ def validate_tool_configuration() -> dict[str, Any]:
     add_issue("available_not_registered", available_names - registered_names)
     add_issue("registered_not_available", registered_names - available_names)
     add_issue("available_missing_risk", available_names - risk_names)
-    add_issue("intent_not_available", intent_names - available_names)
-    add_issue("base_not_available", base_names - available_names)
+    add_issue("openmanus_not_available", openmanus_names - available_names)
+    add_issue("available_not_openmanus", available_names - openmanus_names)
 
     return {
         "ok": not issues,
@@ -204,8 +174,7 @@ def validate_tool_configuration() -> dict[str, Any]:
         "available_count": len(available_names),
         "registered_count": len(registered_names),
         "risk_count": len(risk_names & available_names),
-        "intent_tool_count": len(intent_names),
-        "base_tool_count": len(base_names),
+        "openmanus_tool_count": len(openmanus_names),
     }
 
 
@@ -220,16 +189,19 @@ def _approval_required_payload(tool_name: str, args: dict[str, Any]) -> str:
 
 
 def _guard_tool_for_confirmation(tool):
-    md = tool_registry.get(tool.name)
-    if md is None or not tool_registry.needs_confirmation(tool.name):
+    tool_name = getattr(tool, "name", None)
+    if not tool_name:
+        return tool
+    md = tool_registry.get(tool_name)
+    if md is None or not tool_registry.needs_confirmation(tool_name):
         return tool
 
     async def guarded_runner(**kwargs) -> str:
-        return _approval_required_payload(tool.name, kwargs)
+        return _approval_required_payload(tool_name, kwargs)
 
     return StructuredTool.from_function(
-        name=tool.name,
-        description=tool.description,
+        name=tool_name,
+        description=getattr(tool, "description", ""),
         args_schema=getattr(tool, "args_schema", None),
         coroutine=guarded_runner,
     )
@@ -467,6 +439,11 @@ tool_registry.register_many([
     ),
 ])
 
+# Register tool instances into the registry so execute_tool works without tool_map
+for _tool_name, _tool_instance in AVAILABLE_TOOL_MAP.items():
+    if _tool_name in tool_registry:
+        tool_registry._instances[_tool_name] = _tool_instance
+
 
 def _compact_text(value: Any, limit: int = MAX_EVENT_CHARS) -> str:
     if value is None:
@@ -502,8 +479,86 @@ def _strip_leading_numbered_lines(text: str) -> str:
     return "\n".join(line for line in stripped if line).strip()
 
 
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    """Parse a JSON object from a model response that should contain only JSON."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(stripped[start : end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _artifact_label(kind: str) -> str:
+    labels = {
+        "pdf": "PDF",
+        "markdown": "Markdown",
+    }
+    return labels.get(kind.lower(), "文件")
+
+
+def _artifact_events_from_tool_result(tool_name: str, content: str, *, step: int) -> list[dict[str, Any]]:
+    payload = _parse_json_object(content)
+    if not payload:
+        return []
+
+    artifacts: list[dict[str, Any]] = []
+    raw_artifacts = payload.get("artifacts")
+    if isinstance(raw_artifacts, list):
+        artifacts.extend(item for item in raw_artifacts if isinstance(item, dict))
+
+    raw_artifact = payload.get("artifact")
+    if isinstance(raw_artifact, dict):
+        artifacts.append(raw_artifact)
+
+    raw_pdf_result = payload.get("pdf_result")
+    if isinstance(raw_pdf_result, dict) and isinstance(raw_pdf_result.get("artifact"), dict):
+        artifacts.append(raw_pdf_result["artifact"])
+
+    seen_urls: set[str] = set()
+    events: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        download_url = artifact.get("download_url")
+        filename = artifact.get("filename")
+        if not isinstance(download_url, str) or not isinstance(filename, str):
+            continue
+        if download_url in seen_urls:
+            continue
+        seen_urls.add(download_url)
+        kind = str(artifact.get("kind") or "file")
+        metadata = {
+            "step": step,
+            "tool": tool_name,
+            "runtime": "openmanus",
+            "kind": kind,
+            "title": artifact.get("title"),
+            "filename": filename,
+            "download_url": download_url,
+            "mime_type": artifact.get("mime_type"),
+            "size_bytes": artifact.get("size_bytes"),
+        }
+        events.append({
+            "type": "artifact",
+            "content": f"{_artifact_label(kind)} 已生成：{filename}",
+            "metadata": metadata,
+        })
+    return events
+
+
 class AIAgent:
-    """LangGraph ReAct Agent with hiking-aware request intake and tool selection."""
+    """HikingManus-style Agent with hiking-aware prompts and tools."""
 
     def __init__(self, memory_manager=None, llm_config: RuntimeLlmConfig | None = None):
         self.max_steps = MAX_STEPS
@@ -536,16 +591,42 @@ class AIAgent:
             "session_context": "",
             "knowledge_context": "",
         }
-        self._query_rewriter = QueryRewriter(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-        )
-        self._query_rewriter.llm = self.llm
 
     @staticmethod
     def get_tool_registry() -> ToolRegistry:
         return tool_registry
+
+    def _merge_run_record_metadata(self, base_metadata: dict[str, Any], run_record: AgentRunRecord) -> dict[str, Any]:
+        """Merge run_record.to_metadata() into base_metadata without overwriting existing keys."""
+        record_meta = run_record.to_metadata()
+        merged = dict(base_metadata)
+        for key, value in record_meta.items():
+            if key not in merged:
+                merged[key] = value
+        for key, value in run_record.metadata.items():
+            if key in {"status", "reason"}:
+                continue
+            if key not in merged:
+                merged[key] = value
+        merged.setdefault(
+            "openmanus_runtime",
+            {
+                "base": "BaseAgent",
+                "react": "ReActAgent",
+                "tool_call": "ToolCallAgent",
+                "manus": "HikingManus",
+            },
+        )
+        logger.info(
+            "AgentRunRecord: lane=%s exit_reason=%s step_count=%s tool_count=%s selected_tools=%s duration_ms=%.1f",
+            record_meta.get("lane"),
+            record_meta.get("exit_reason"),
+            record_meta.get("step_count"),
+            record_meta.get("tool_count"),
+            record_meta.get("selected_tools"),
+            record_meta.get("duration_ms", 0),
+        )
+        return merged
 
     def _build_system_prompt(self, context: AgentRequestContext, selected_tools: list) -> str:
         slot_lines = []
@@ -553,7 +634,7 @@ class AIAgent:
             if value is not None:
                 slot_lines.append(f"- {key}: {value}")
         slots_text = "\n".join(slot_lines) if slot_lines else "- 未抽取到稳定槽位"
-        tool_names = "、".join(tool.name for tool in selected_tools) or "无"
+        tool_names = "、".join(getattr(tool, "name", "unknown_tool") for tool in selected_tools) or "无"
         location_text = "<Location>\n- 未提供当前位置\n</Location>"
         if context.current_location:
             location_items = [
@@ -593,7 +674,55 @@ class AIAgent:
             "- 如当前定位只有 latitude/longitude，调用 geo_lookup 时直接传 latitude 和 longitude；weather_lookup 可使用 geo_lookup 返回的 adcode、city 或坐标。\n"
             "- 如 PrefetchedEvidence 已包含 geo_lookup 和 weather_lookup，本轮不要再次调用它们；可直接回答或最多调用一次 risk_assessment。\n"
             "- 户外安全建议优先引用已预取证据、hiking_knowledge_search、route_research、weather_lookup 等证据。\n"
-            "- 最终回答必须是自然中文纯文本，不要 Markdown 标题、粗体符号或编号格式。\n"
+            "- 最终回答使用自然中文，不要 Markdown 标题或编号格式；但对关键信息使用 **加粗** 标记（每段 2-5 处）。\n"
+            "- 普通徒步场景不要要求终端、下载或任意文件操作。\n"
+            "- 生成文档时先组织 Markdown，再按需生成 PDF，并说明路径和影响范围。\n"
+            "</ExecutionRules>\n\n"
+            f"<NextStep>\n{NEXT_STEP_PROMPT}\n</NextStep>"
+        )
+
+        if session_ctx := self._memory_context.get("session_context", ""):
+            system_msg += f"\n\n<SessionSummary>\n{session_ctx}\n</SessionSummary>"
+        location_text = "<Location>\n- 未提供当前位置\n</Location>"
+        if context.current_location:
+            location_items = [
+                f"- {key}: {value}"
+                for key, value in context.current_location.to_dict().items()
+                if value is not None and value != ""
+            ]
+            location_text = "<Location>\n" + ("\n".join(location_items) or "- 已授权但坐标为空") + "\n</Location>"
+        rewritten_text = context.rewritten_query or context.raw_query
+        prefetch_text = "<PrefetchedEvidence>\n- 无\n</PrefetchedEvidence>"
+        if context.prefetched_tool_results:
+            result_lines = [
+                json.dumps(result, ensure_ascii=False, default=str)
+                for result in context.prefetched_tool_results
+            ]
+            prefetch_text = "<PrefetchedEvidence>\n" + "\n".join(result_lines) + "\n</PrefetchedEvidence>"
+
+        system_msg = (
+            f"{SYSTEM_PROMPT}\n\n"
+            "<RuntimeContext>\n"
+            f"- raw_query: {context.raw_query}\n"
+            f"- rewritten_query: {rewritten_text}\n"
+            f"- intent: {context.intent.value}\n"
+            f"- scenario: {context.scenario or '未显式指定'}\n"
+            f"- selected_tools: {tool_names}\n"
+            f"- missing_slots: {', '.join(context.missing_slots) if context.missing_slots else '无'}\n"
+            f"- clarifying_question: {context.clarifying_question or '无'}\n"
+            "</RuntimeContext>\n\n"
+            "<Slots>\n"
+            f"{slots_text}\n"
+            "</Slots>\n\n"
+            f"{location_text}\n\n"
+            f"{prefetch_text}\n\n"
+            "<ExecutionRules>\n"
+            "- 缺少目的地、日期等关键条件时先追问，不要编造路线或天气。\n"
+            "- 当用户询问今天/当前位置/附近天气是否适合徒步，且当前定位存在时，不要追问城市；如未预取，先用 geo_lookup 反查定位，再用 weather_lookup 获取天气。\n"
+            "- 如当前定位只有 latitude/longitude，调用 geo_lookup 时直接传 latitude 和 longitude；weather_lookup 可使用 geo_lookup 返回的 adcode、city 或坐标。\n"
+            "- 如 PrefetchedEvidence 已包含 geo_lookup 和 weather_lookup，本轮不要再次调用它们；可直接回答或最多调用一次 risk_assessment。\n"
+            "- 户外安全建议优先引用已预取证据、hiking_knowledge_search、route_research、weather_lookup 等证据。\n"
+            "- 最终回答使用自然中文，不要 Markdown 标题或编号格式；但对关键信息使用 **加粗** 标记（每段 2-5 处）。\n"
             "- 普通徒步场景不要要求终端、下载或任意文件操作。\n"
             "- 生成文档时先组织 Markdown，再按需生成 PDF，并说明路径和影响范围。\n"
             "</ExecutionRules>\n\n"
@@ -606,24 +735,14 @@ class AIAgent:
             system_msg += f"\n\n<LongTermMemory>\n{knowledge_ctx}\n</LongTermMemory>"
         return system_msg
 
-    def _make_state_modifier(self, context: AgentRequestContext, selected_tools: list):
-        def _state_modifier(state: dict) -> list:
-            return [SystemMessage(content=self._build_system_prompt(context, selected_tools))]
-
-        return _state_modifier
-
-    def _rewrite_user_query(self, message: str) -> str:
-        try:
-            rewritten = self._query_rewriter.humanize_for_answer(message)
-        except Exception:
-            logger.warning("Agent query rewrite failed", exc_info=True)
-            return message
-        return rewritten.strip() or message
-
     def _clean_final_answer(self, text: str) -> str:
-        cleaned = clean_display_text(text, preserve_lines=True, keep_list_markers=False)
-        cleaned = _strip_leading_numbered_lines(cleaned)
-        return cleaned or text.strip()
+        cleaned = clean_display_text(
+            text,
+            preserve_lines=True,
+            keep_list_markers=True,
+            keep_markdown_emphasis=True,
+        )
+        return emphasize_display_terms(cleaned)
 
     def _infer_followup_scenario(self, message: str, history: list | None, scenario: str | None) -> str | None:
         if scenario:
@@ -643,320 +762,320 @@ class AIAgent:
             return any(marker in content for marker in ROUTE_FOLLOWUP_MARKERS)
         return False
 
-    def _prefetched_result(self, context: AgentRequestContext, tool_name: str) -> dict[str, Any] | None:
-        for item in reversed(context.prefetched_tool_results):
-            if not isinstance(item, dict) or item.get("tool") != tool_name:
-                continue
-            result = item.get("result")
-            return result if isinstance(result, dict) else None
-        return None
-
-    def _weather_suitability_status(self, weather: dict[str, Any] | None) -> dict[str, Any]:
-        if not weather or not weather.get("ok"):
-            return {"status": "unknown", "suitable": False, "reason": "没有拿到可用天气数据"}
-
-        text = json.dumps(weather, ensure_ascii=False, default=str)
-        if "未接入实时天气 API" in text or "AMAP_API_KEY 未配置" in text:
-            return {"status": "unknown", "suitable": False, "reason": "实时天气 API 未配置"}
-
-        bad_markers = ("暴雨", "雷暴", "雷阵雨", "大雨", "中雨", "台风", "冰雹", "大雪", "暴雪", "大风预警", "橙色预警", "红色预警")
-        caution_markers = ("小雨", "阵雨", "雾", "霾", "沙尘", "阴")
-        if any(marker in text for marker in bad_markers):
-            return {"status": "unsafe", "suitable": False, "reason": "天气含强降雨、雷暴、大风或预警信号"}
-
-        wind_power = str(weather.get("wind_power") or weather.get("wind") or "")
-        wind_numbers = [int(x) for x in re.findall(r"\d+", wind_power)]
-        if wind_numbers and max(wind_numbers) >= 6:
-            return {"status": "unsafe", "suitable": False, "reason": "风力偏大，不适合进入山地路线"}
-
-        if any(marker in text for marker in caution_markers):
-            return {"status": "caution", "suitable": True, "reason": "天气可出行但需要缩短路线并准备防雨防滑"}
-
-        return {"status": "suitable", "suitable": True, "reason": "天气未见明显硬风险"}
-
-    def _llm_plain_text(self, system_prompt: str, user_prompt: str) -> str:
-        try:
-            response = self.llm.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt),
-            ])
-            content = response.content if hasattr(response, "content") else str(response)
-            return str(content or "").strip()
-        except Exception:
-            logger.warning("Direct Agent LLM answer failed", exc_info=True)
-            return ""
-
-    def _weather_suitability_text(self, context: AgentRequestContext) -> tuple[str, dict[str, Any]] | None:
-        if not self._is_current_location_weather_request(context):
-            return None
-        geo_result = self._prefetched_result(context, "geo_lookup")
-        weather_result = self._prefetched_result(context, "weather_lookup")
-        if not weather_result:
-            return None
-
-        status = self._weather_suitability_status(weather_result)
-        evidence = {
-            "location": geo_result,
-            "weather": weather_result,
-            "status": status,
-        }
-        answer = self._llm_plain_text(
-            "你是户外徒步安全助手。基于证据判断今天是否适合轻量徒步。"
-            "只输出自然中文纯文本，先给明确结论，再给2-3个理由。"
-            f"如果结论适合，最后必须询问：{ROUTE_RECOMMENDATION_PROMPT}"
-            "如果不适合或证据不足，不要推荐路线。",
-            "证据：\n" + json.dumps(evidence, ensure_ascii=False, default=str),
-        )
-        if not answer:
-            destination = weather_result.get("city") or weather_result.get("destination") or context.slots.destination or "当前位置"
-            if status["status"] == "unknown":
-                answer = f"结论：现在还不能可靠判断{destination}今天是否适合徒步。原因是{status['reason']}，请先配置或补充实时天气来源后再决策。"
-            elif status["suitable"]:
-                weather = weather_result.get("weather") or "天气未注明"
-                temperature = weather_result.get("temperature") or "温度未知"
-                wind = weather_result.get("wind_power") or weather_result.get("wind") or "风力未知"
-                answer = f"结论：今天适合轻量徒步。{destination}当前天气为{weather}，温度{temperature}，风力{wind}，未见明显硬风险。建议选择成熟短线，带足饮水、防晒和雨具。{ROUTE_RECOMMENDATION_PROMPT}"
-            else:
-                answer = f"结论：今天不建议去徒步。原因是{status['reason']}，建议改期或换成低风险城市步道。"
-
-        answer = self._clean_final_answer(answer)
-        if status["suitable"] and ROUTE_RECOMMENDATION_PROMPT not in answer:
-            answer = f"{answer.rstrip()} {ROUTE_RECOMMENDATION_PROMPT}"
-        return answer, status
-
-    def _route_destination_from_geo(self, context: AgentRequestContext, geo_result: dict[str, Any] | None) -> str:
-        primary = (geo_result or {}).get("primary") or {}
-        return (
-            str(primary.get("district") or "").strip()
-            or str(primary.get("city") or "").strip()
-            or str(primary.get("name") or "").strip()
-            or context.slots.destination
-            or (context.current_location.label if context.current_location else "")
-            or "当前位置"
-        )
-
-    def _is_current_location_route_request(self, context: AgentRequestContext, history: list | None = None) -> bool:
-        if context.intent != AgentIntent.ROUTE_PLAN or not context.current_location:
-            return False
-        text = context.raw_query
-        return (
-            self._is_route_recommendation_followup(text, history)
-            or any(word in text for word in ("推荐路线", "路线推荐", "附近", "周边", "徒步路线"))
-        )
-
-    def _route_recommendation_text(self, context: AgentRequestContext) -> tuple[str, dict[str, Any]] | None:
-        route_result = self._prefetched_result(context, "route_research")
-        if not route_result:
-            return None
-
-        evidence = {
-            "destination": context.slots.destination,
-            "route_research": route_result,
-        }
-        answer = self._llm_plain_text(
-            "你是户外徒步路线推荐助手。基于搜索证据推荐附近路线。"
-            "输出自然中文纯文本；每条路线必须包含名称、推荐星级、推荐理由和出发前核验提醒。"
-            "如果搜索证据不足，必须明确说明资料不足，不能编造。",
-            "证据：\n" + json.dumps(evidence, ensure_ascii=False, default=str),
-        )
-        routes = route_result.get("recommended_routes") if isinstance(route_result, dict) else None
-        if not answer:
-            destination = route_result.get("destination") or context.slots.destination or "当前位置"
-            if routes:
-                lines = [f"我按{destination}附近先搜了路线，可优先看："]
-                for route in routes[:5]:
-                    lines.append(
-                        f"{route.get('name', '候选路线')}，推荐星级 {route.get('rating', '待核验')}，{route.get('reason', '出发前仍需核验路线信息。')}"
-                    )
-                lines.append("出发前再核验开放状态、天气预警、交通接驳、里程和爬升。")
-                answer = "\n".join(lines)
-            else:
-                answer = f"我已经搜索{destination}附近徒步路线，但没有拿到足够明确的路线名和星级依据。可以换成更具体的区域或景区名，我再继续查。"
-
-        answer = self._clean_final_answer(answer)
-        return answer, {"phase": "route_recommendation", "routes_found": len(routes or [])}
-
-    def _is_current_location_weather_request(self, context: AgentRequestContext) -> bool:
-        if not context.current_location:
-            return False
-        if context.intent not in {AgentIntent.RISK_ASSESSMENT, AgentIntent.ROUTE_PLAN}:
-            return False
-        text = context.raw_query
-        weather_words = ("天气", "适合", "能去", "可以去", "徒步吗", "去徒步")
-        return any(word in text for word in weather_words)
-
-    def _location_tool_args(self, context: AgentRequestContext) -> dict[str, Any]:
-        location = context.current_location
-        args: dict[str, Any] = {}
-        if location and location.latitude is not None and location.longitude is not None:
-            args["latitude"] = location.latitude
-            args["longitude"] = location.longitude
-        elif context.slots.destination:
-            args["destination"] = context.slots.destination
-        return args
-
-    def _weather_tool_args(self, context: AgentRequestContext, geo_result: dict[str, Any] | None = None) -> dict[str, Any]:
-        location = context.current_location
-        primary = (geo_result or {}).get("primary") or {}
-        args: dict[str, Any] = {}
-        adcode = primary.get("adcode") or (location.adcode if location else None)
-        if adcode:
-            args["adcode"] = str(adcode)
-        if context.slots.destination:
-            args["destination"] = context.slots.destination
-        if context.slots.date:
-            args["date"] = context.slots.date
-        if location and location.latitude is not None and location.longitude is not None:
-            args["latitude"] = location.latitude
-            args["longitude"] = location.longitude
-        return args
-
-    async def _prefetch_current_location_weather(self, context: AgentRequestContext) -> list[dict[str, Any]]:
-        if not self._is_current_location_weather_request(context):
-            return []
-
-        events: list[dict[str, Any]] = []
-        geo_args = self._location_tool_args(context)
-        if not geo_args:
-            return []
-
-        events.append({
-            "type": "tool_call",
-            "content": f"第 1 步：调用 geo_lookup，参数：{_compact_text(geo_args)}",
-            "metadata": {
-                "step": 1,
-                "tool": "geo_lookup",
-                "args": _compact_text(geo_args, MAX_ARGS_CHARS),
-                "args_raw": geo_args,
-                "prefetch": True,
-            },
-        })
-        try:
-            geo_result = await geo_lookup.ainvoke(geo_args)
-        except Exception as e:
-            geo_result = {"ok": False, "message": f"geo_lookup 调用失败: {str(e)}"}
-        safe_geo = _jsonable(geo_result)
-        context.prefetched_tool_results.append({"tool": "geo_lookup", "args": geo_args, "result": safe_geo})
-        events.append({
-            "type": "tool_result",
-            "content": f"第 1 步：geo_lookup 返回：{_compact_text(safe_geo)}",
-            "metadata": {"step": 1, "tool": "geo_lookup", "prefetch": True},
-        })
-
-        weather_args = self._weather_tool_args(context, geo_result if isinstance(geo_result, dict) else None)
-        events.append({
-            "type": "tool_call",
-            "content": f"第 2 步：调用 weather_lookup，参数：{_compact_text(weather_args)}",
-            "metadata": {
-                "step": 2,
-                "tool": "weather_lookup",
-                "args": _compact_text(weather_args, MAX_ARGS_CHARS),
-                "args_raw": weather_args,
-                "prefetch": True,
-            },
-        })
-        try:
-            weather_result = await weather_lookup.ainvoke(weather_args)
-        except Exception as e:
-            weather_result = {"ok": False, "message": f"weather_lookup 调用失败: {str(e)}"}
-        safe_weather = _jsonable(weather_result)
-        context.prefetched_tool_results.append({"tool": "weather_lookup", "args": weather_args, "result": safe_weather})
-        events.append({
-            "type": "tool_result",
-            "content": f"第 2 步：weather_lookup 返回：{_compact_text(safe_weather)}",
-            "metadata": {"step": 2, "tool": "weather_lookup", "prefetch": True},
-        })
-        return events
-
-    async def _prefetch_current_location_routes(
-        self,
-        context: AgentRequestContext,
-        history: list | None = None,
-    ) -> list[dict[str, Any]]:
-        if not self._is_current_location_route_request(context, history):
-            return []
-
-        events: list[dict[str, Any]] = []
-        geo_args = self._location_tool_args(context)
-        geo_result: dict[str, Any] | None = None
-        if geo_args:
-            events.append({
-                "type": "tool_call",
-                "content": f"第 1 步：调用 geo_lookup，参数：{_compact_text(geo_args)}",
-                "metadata": {
-                    "step": 1,
-                    "tool": "geo_lookup",
-                    "args": _compact_text(geo_args, MAX_ARGS_CHARS),
-                    "args_raw": geo_args,
-                    "prefetch": True,
-                },
-            })
-            try:
-                raw_geo_result = await geo_lookup.ainvoke(geo_args)
-            except Exception as e:
-                raw_geo_result = {"ok": False, "message": f"geo_lookup 调用失败: {str(e)}"}
-            safe_geo = _jsonable(raw_geo_result)
-            geo_result = safe_geo if isinstance(safe_geo, dict) else None
-            context.prefetched_tool_results.append({"tool": "geo_lookup", "args": geo_args, "result": safe_geo})
-            events.append({
-                "type": "tool_result",
-                "content": f"第 1 步：geo_lookup 返回：{_compact_text(safe_geo)}",
-                "metadata": {"step": 1, "tool": "geo_lookup", "prefetch": True},
-            })
-
-        destination = self._route_destination_from_geo(context, geo_result)
-        context.slots.destination = destination
-        route_args = {
-            "destination": destination,
-            "date": context.slots.date or "今天",
-            "days": context.slots.days,
-            "focus": "徒步路线 推荐 星级",
-        }
-        route_args = {key: value for key, value in route_args.items() if value is not None}
-        events.append({
-            "type": "tool_call",
-            "content": f"第 {len(events) // 2 + 1} 步：调用 route_research，参数：{_compact_text(route_args)}",
-            "metadata": {
-                "step": len(events) // 2 + 1,
-                "tool": "route_research",
-                "args": _compact_text(route_args, MAX_ARGS_CHARS),
-                "args_raw": route_args,
-                "prefetch": True,
-            },
-        })
-        try:
-            route_result = await route_research.ainvoke(route_args)
-        except Exception as e:
-            route_result = {"ok": False, "message": f"route_research 调用失败: {str(e)}"}
-        safe_route = _jsonable(route_result)
-        context.prefetched_tool_results.append({"tool": "route_research", "args": route_args, "result": safe_route})
-        events.append({
-            "type": "tool_result",
-            "content": f"第 {len(events) // 2 + 1} 步：route_research 返回：{_compact_text(safe_route)}",
-            "metadata": {"step": len(events) // 2 + 1, "tool": "route_research", "prefetch": True},
-        })
-        return events
-
-    def _build_react_agent(self, context: AgentRequestContext):
-        selected_tools = select_tools_for_context(context)
-        return create_react_agent(
-            model=self.llm,
+    def _build_hiking_manus(self, context: AgentRequestContext) -> HikingManus:
+        selected_tools = self._openmanus_tools(context)
+        system_prompt = self._build_system_prompt(context, selected_tools)
+        return HikingManus.create(
+            llm=self.llm,
             tools=apply_tool_confirmation_guards(selected_tools),
-            prompt=self._make_state_modifier(context, selected_tools),
+            system_prompt=system_prompt,
+            max_steps=self.max_steps,
         )
 
-    def _build_messages(self, message: str, history: list | None = None) -> list:
-        messages = []
-        if history:
-            for msg in history[-10:]:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    messages.append(AIMessage(content=content))
-        messages.append(HumanMessage(content=message))
-        return messages
+    def _openmanus_tool_names(self, context: AgentRequestContext | None = None) -> list[str]:
+        if context is None:
+            return _unique_tool_names(OPENMANUS_TOOL_NAMES)
+        return _unique_tool_names(INTENT_TOOL_NAMES.get(context.intent, OPENMANUS_TOOL_NAMES))
+
+    def _openmanus_tools(self, context: AgentRequestContext | None = None) -> list:
+        return [AVAILABLE_TOOL_MAP[name] for name in self._openmanus_tool_names(context)]
+
+    def _load_openmanus_history(self, runtime: HikingManus, history: list | None) -> None:
+        if not history:
+            return
+        for item in history[-10:]:
+            role = item.get("role", "") if isinstance(item, dict) else ""
+            content = item.get("content", "") if isinstance(item, dict) else ""
+            if not content:
+                continue
+            if role == "user":
+                runtime.memory.add_message(HumanMessage(content=content))
+            elif role == "assistant":
+                runtime.memory.add_message(AIMessage(content=content))
+
+    def _approval_event_from_openmanus_result(
+        self,
+        tool_name: str,
+        content: str,
+        *,
+        step: int,
+        call_id: str,
+        args: dict[str, Any],
+    ) -> dict | None:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        payload = _parse_json_object(content[start : end + 1])
+        if not payload or payload.get("type") != "approval_required":
+            return None
+        req = tool_registry.get_call_request(tool_name, args)
+        risk_level = req.risk_level.value if req else RiskLevel.MEDIUM.value
+        return {
+            "type": "approval_required",
+            "content": payload.get("message") or f"工具 {tool_name} 需要用户确认后才能执行。",
+            "metadata": {
+                "step": step,
+                "tool": tool_name,
+                "args_raw": args,
+                "tool_call_id": call_id,
+                "risk_level": risk_level,
+                "needs_confirmation": True,
+                "runtime": "openmanus",
+            },
+        }
+
+    def _approval_event_for_tool_call(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        *,
+        step: int,
+        call_id: str,
+    ) -> dict:
+        req = tool_registry.get_call_request(tool_name, args)
+        risk_level = req.risk_level.value if req else RiskLevel.MEDIUM.value
+        return {
+            "type": "approval_required",
+            "content": f"工具 {tool_name} 需要用户确认后才能执行。",
+            "metadata": {
+                "step": step,
+                "tool": tool_name,
+                "args_raw": args,
+                "tool_call_id": call_id,
+                "risk_level": risk_level,
+                "needs_confirmation": True,
+                "runtime": "openmanus",
+            },
+        }
+
+    async def _aexecute_openmanus(
+        self,
+        message: str,
+        history: list | None = None,
+        scenario: str | None = None,
+        current_location: CurrentLocation | dict | None = None,
+    ) -> dict:
+        events = [
+            event
+            async for event in self._aexecute_stream_openmanus(
+                message,
+                history=history,
+                scenario=scenario,
+                current_location=current_location,
+            )
+        ]
+        text = "".join(event.get("content", "") for event in events if event.get("type") == "text").strip()
+        done = next((event for event in reversed(events) if event.get("type") == "done"), {})
+        tool_calls = [
+            {
+                "tool": event.get("metadata", {}).get("tool"),
+                "args": event.get("metadata", {}).get("args_raw") or event.get("metadata", {}).get("args"),
+            }
+            for event in events
+            if event.get("type") == "tool_call"
+        ]
+        metadata = done.get("metadata", {}) if isinstance(done, dict) else {}
+        return {
+            "output": text or "任务已完成。",
+            "intermediate_steps": tool_calls,
+            "exit_status": metadata.get("status", "completed"),
+            "exit_reason": metadata.get("reason", "openmanus_completed"),
+            "metadata": metadata,
+        }
+
+    async def _aexecute_stream_openmanus(
+        self,
+        message: str,
+        history: list | None = None,
+        scenario: str | None = None,
+        current_location: CurrentLocation | dict | None = None,
+    ) -> AsyncGenerator[dict, None]:
+        run_record = AgentRunRecord()
+        run_record.transition(AgentState.EXECUTING)
+        run_record.lane = ExecutionLane.REACT
+
+        effective_scenario = self._infer_followup_scenario(message, history, scenario)
+        context = understand_request(message, scenario=effective_scenario, current_location=current_location)
+        run_record.selected_tools = self._openmanus_tool_names(context)
+        await self._inject_memory_context(history, message)
+
+        runtime = self._build_hiking_manus(context)
+        self._load_openmanus_history(runtime, history)
+        runtime.update_memory("user", message)
+
+        yield {
+            "type": "thought",
+            "content": "HikingManus 第 0 步：初始化 BaseAgent/ReActAgent/ToolCallAgent/HikingManus 运行时。",
+            "metadata": {
+                "phase": "openmanus_start",
+                "runtime": "openmanus",
+                "max_steps": runtime.max_steps,
+                "tools": run_record.selected_tools,
+            },
+        }
+
+        assistant_parts: list[str] = []
+        repeat_detector = RepeatCallDetector()
+        stuck_detector = StuckDetector()
+
+        try:
+            while runtime.current_step < runtime.max_steps and runtime.state.value != "FINISHED":
+                runtime.current_step += 1
+                step = runtime.current_step
+                yield {
+                    "type": "thought",
+                    "content": f"HikingManus 第 {step} 步：think() 判断下一步动作。",
+                    "metadata": {"step": step, "phase": "think", "runtime": "openmanus"},
+                }
+
+                should_act = await runtime.think()
+                if not should_act or not runtime.tool_calls:
+                    content = runtime._message_text(runtime.messages[-1]) if runtime.messages else ""
+                    final_text = self._clean_final_answer(content or "任务已完成。")
+                    assistant_parts.append(final_text)
+                    stuck_detector.record_assistant_content(final_text)
+                    run_record.complete(ExitReason.NATURAL_END, current_step=step)
+                    yield {
+                        "type": "text",
+                        "content": final_text,
+                        "metadata": {"phase": "final_answer", "runtime": "openmanus"},
+                    }
+                    await self._commit_memory(history, message, "".join(assistant_parts).strip(), context)
+                    yield self.exit_controller.done_event(
+                        "completed",
+                        "openmanus_completed",
+                        **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+                    )
+                    return
+
+                normalized_calls: list[tuple[str, dict[str, Any], str]] = []
+                for call in runtime.tool_calls:
+                    name, args, call_id = runtime._normalize_tool_call(call)
+                    if repeat_detector.is_repeat(name, args):
+                        continue
+                    repeat_detector.record(name, args)
+                    normalized_calls.append((name, args, call_id))
+
+                if not normalized_calls:
+                    run_record.complete(ExitReason.STUCK, current_step=step, reason="repeat_call_detected")
+                    yield {"type": "text", "content": "检测到重复调用相同工具，已按 HikingManus 运行时停止。"}
+                    yield self.exit_controller.done_event(
+                        "stuck",
+                        "repeat_call_detected",
+                        **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+                    )
+                    return
+
+                yield {
+                    "type": "thought",
+                    "content": f"HikingManus 第 {step} 步：act() 执行工具：{'、'.join(name for name, _, _ in normalized_calls)}。",
+                    "metadata": {
+                        "step": step,
+                        "phase": "act",
+                        "runtime": "openmanus",
+                        "tools": [name for name, _, _ in normalized_calls],
+                    },
+                }
+
+                for name, args, call_id in normalized_calls:
+                    req = tool_registry.get_call_request(name, args)
+                    risk_level = req.risk_level.value if req else RiskLevel.MEDIUM.value
+                    needs_confirmation = req.needs_confirmation if req else False
+                    yield {
+                        "type": "tool_call",
+                        "content": f"HikingManus 第 {step} 步：调用 {name}，参数：{_compact_text(args, MAX_ARGS_CHARS)}",
+                        "metadata": {
+                            "step": step,
+                            "tool": name,
+                            "args": _compact_text(args, MAX_ARGS_CHARS),
+                            "args_raw": args,
+                            "tool_call_id": call_id,
+                            "risk_level": risk_level,
+                            "needs_confirmation": needs_confirmation,
+                            "runtime": "openmanus",
+                        },
+                    }
+                    if needs_confirmation:
+                        yield self._approval_event_for_tool_call(name, args, step=step, call_id=call_id)
+                        run_record.complete(ExitReason.CLARIFICATION_NEEDED, tool=name, step=step)
+                        yield self.exit_controller.done_event(
+                            "waiting_for_user",
+                            "tool_confirmation_required",
+                            **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+                        )
+                        return
+
+                    result_text = await runtime.execute_tool(name, args)
+                    runtime.memory.add_message(ToolMessage(content=result_text, name=name, tool_call_id=call_id or name))
+                    stuck_detector.record_observation(name, result_text)
+                    if stuck_detector.is_stuck():
+                        reason = stuck_detector.stuck_reason()
+                        run_record.complete(ExitReason.STUCK, current_step=step, reason=reason)
+                        yield {"type": "text", "content": f"检测到循环卡住（{reason}），已自动停止。"}
+                        yield self.exit_controller.done_event(
+                            "stuck",
+                            "openmanus_stuck",
+                            **self._merge_run_record_metadata({"runtime": "openmanus", "stuck_reason": reason}, run_record),
+                        )
+                        return
+
+                    approval_event = self._approval_event_from_openmanus_result(
+                        name,
+                        result_text,
+                        step=step,
+                        call_id=call_id,
+                        args=args,
+                    )
+                    if approval_event:
+                        yield approval_event
+                    else:
+                        yield {
+                            "type": "tool_result",
+                            "content": f"HikingManus 第 {step} 步：{name} 返回：{_compact_text(result_text)}",
+                            "metadata": {"step": step, "tool": name, "runtime": "openmanus"},
+                        }
+                        for artifact_event in _artifact_events_from_tool_result(name, result_text, step=step):
+                            yield artifact_event
+
+                    exit_result = self.exit_controller.from_tool_result(
+                        name,
+                        result_text,
+                        current_step=step,
+                    )
+                    if exit_result:
+                        exit_reason = ExitReason.TERMINATE_TOOL if name == "terminate" else ExitReason.NATURAL_END
+                        if exit_result.status.value == "waiting_for_user":
+                            exit_reason = ExitReason.CLARIFICATION_NEEDED
+                        run_record.complete(exit_reason, tool=name, step=step)
+                        text_event = exit_result.text_event()
+                        if text_event:
+                            assistant_parts.append(text_event.get("content", ""))
+                            yield text_event
+                        await self._commit_memory(history, message, "".join(assistant_parts).strip(), context)
+                        yield self.exit_controller.done_event(
+                            exit_result.status.value,
+                            exit_result.reason,
+                            **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+                        )
+                        return
+
+            run_record.complete(ExitReason.BUDGET_EXHAUSTED, current_step=runtime.current_step)
+            yield {"type": "text", "content": self.exit_controller._budget_exhausted_message(context)}
+            yield self.exit_controller.done_event(
+                "budget_exhausted",
+                "step_budget_exhausted",
+                **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+            )
+        except Exception as e:
+            logger.exception("HikingManus Agent stream error")
+            run_record.complete(ExitReason.ERROR, error=str(e))
+            yield {"type": "error", "content": f"执行出错: {str(e)}"}
+            yield self.exit_controller.done_event(
+                "error",
+                "openmanus_error",
+                **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
+            )
 
     async def _inject_memory_context(self, history: list | None, message: str) -> None:
         if self.memory_manager and settings.memory_enabled:
@@ -990,63 +1109,6 @@ class AIAgent:
         except Exception:
             logger.warning("Memory commit failed", exc_info=True)
 
-    async def _execute_agent(self, messages: list, context: AgentRequestContext, react_agent=None) -> dict:
-        agent = react_agent or self._build_react_agent(context)
-        try:
-            result = await agent.ainvoke(
-                {"messages": messages},
-                config={"recursion_limit": self.max_steps * 2 + 2},
-            )
-            output = ""
-            intermediate_steps = []
-
-            for msg in result.get("messages", []):
-                content = self._message_content(msg)
-                if content:
-                    output = content
-                if getattr(msg, "type", "") == "tool" or hasattr(msg, "tool_call_id"):
-                    step, tool_name = self._tool_result_name(msg, {})
-                    exit_result = self.exit_controller.from_tool_result(
-                        tool_name,
-                        content,
-                        current_step=step,
-                    )
-                    if exit_result:
-                        return {
-                            "output": exit_result.final_text,
-                            "intermediate_steps": intermediate_steps,
-                            "exit_status": exit_result.status.value,
-                            "exit_reason": exit_result.reason,
-                        }
-                for call in self._extract_tool_calls(msg):
-                    intermediate_steps.append({
-                        "tool": call["name"],
-                        "args": call["args"],
-                    })
-
-            return {
-                "output": self._clean_final_answer(output or "任务已完成"),
-                "intermediate_steps": intermediate_steps,
-                "exit_status": "completed",
-                "exit_reason": "agent_completed",
-            }
-        except Exception as e:
-            exit_result = self.exit_controller.from_exception(e, context=context)
-            if exit_result:
-                return {
-                    "output": exit_result.final_text,
-                    "intermediate_steps": [],
-                    "exit_status": exit_result.status.value,
-                    "exit_reason": exit_result.reason,
-                }
-            logger.exception("Agent execution error")
-            return {
-                "output": f"执行出错: {str(e)}",
-                "intermediate_steps": [],
-                "exit_status": "error",
-                "exit_reason": "agent_error",
-            }
-
     async def aexecute(
         self,
         message: str,
@@ -1054,299 +1116,12 @@ class AIAgent:
         scenario: str | None = None,
         current_location: CurrentLocation | dict | None = None,
     ) -> dict:
-        effective_scenario = self._infer_followup_scenario(message, history, scenario)
-        context = understand_request(message, scenario=effective_scenario, current_location=current_location)
-        context.rewritten_query = self._rewrite_user_query(message)
-        await self._prefetch_current_location_weather(context)
-        weather_answer = self._weather_suitability_text(context)
-        if weather_answer:
-            output, status = weather_answer
-            await self._commit_memory(history, message, output, context)
-            return {
-                "output": output,
-                "intermediate_steps": context.prefetched_tool_results,
-                "exit_status": "completed",
-                "exit_reason": "weather_suitability_completed",
-                "metadata": status,
-            }
-        await self._prefetch_current_location_routes(context, history)
-        route_answer = self._route_recommendation_text(context)
-        if route_answer:
-            output, metadata = route_answer
-            await self._commit_memory(history, message, output, context)
-            return {
-                "output": output,
-                "intermediate_steps": context.prefetched_tool_results,
-                "exit_status": "completed",
-                "exit_reason": "route_recommendation_completed",
-                "metadata": metadata,
-            }
-        messages = self._build_messages(context.rewritten_query or message, history)
-        await self._inject_memory_context(history, message)
-        result = await self._execute_agent(messages, context)
-        await self._commit_memory(history, message, result.get("output", ""), context)
-        return result
-
-    def _message_content(self, msg: Any) -> str:
-        content = getattr(msg, "content", "")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    parts.append(str(item.get("text", item.get("content", ""))))
-                else:
-                    parts.append(str(item))
-            return "".join(parts).strip()
-        return str(content or "").strip()
-
-    def _extract_tool_calls(self, msg: Any) -> list[dict]:
-        raw_calls = getattr(msg, "tool_calls", None) or []
-        additional = getattr(msg, "additional_kwargs", None) or {}
-        raw_calls = raw_calls or additional.get("tool_calls", [])
-
-        calls = []
-        for call in raw_calls:
-            if not isinstance(call, dict):
-                continue
-            function = call.get("function") or {}
-            name = call.get("name") or function.get("name") or ""
-            raw_args = call.get("args")
-            if raw_args is None:
-                raw_args = call.get("arguments", function.get("arguments", ""))
-            call_id = call.get("id") or call.get("tool_call_id") or ""
-            args_dict = raw_args if isinstance(raw_args, dict) else None
-            calls.append({
-                "id": call_id,
-                "name": name or "unknown_tool",
-                "args": _compact_text(raw_args, MAX_ARGS_CHARS),
-                "args_raw": args_dict,
-            })
-        return calls
-
-    def _iter_update_messages(self, update: Any):
-        if isinstance(update, dict):
-            for node_name, payload in update.items():
-                if isinstance(payload, dict):
-                    messages = payload.get("messages", [])
-                elif isinstance(payload, list):
-                    messages = payload
-                else:
-                    messages = [payload]
-                if not isinstance(messages, list):
-                    messages = [messages]
-                for msg in messages:
-                    yield str(node_name), msg
-
-    def _is_tool_message(self, node_name: str, msg: Any) -> bool:
-        msg_type = getattr(msg, "type", "")
-        return node_name in {"tools", "tool"} or msg_type == "tool" or hasattr(msg, "tool_call_id")
-
-    def _tool_result_name(self, msg: Any, pending_tools: dict[str, tuple[int, str]]) -> tuple[int, str]:
-        call_id = getattr(msg, "tool_call_id", "") or ""
-        step, tool_name = pending_tools.get(call_id, (0, ""))
-        return step, getattr(msg, "name", "") or tool_name or "tool"
-
-    def _approval_event_from_tool_message(
-        self,
-        msg: Any,
-        pending_tools: dict[str, tuple[int, str]],
-        fallback_step: int,
-    ) -> dict | None:
-        content = self._message_content(msg)
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict) or payload.get("type") != "approval_required":
-            return None
-
-        step, tool_name = self._tool_result_name(msg, pending_tools)
-        if step == 0:
-            step = fallback_step or 1
-        req = tool_registry.get_call_request(tool_name, payload.get("args") or {})
-        risk_level = req.risk_level.value if req else RiskLevel.MEDIUM.value
-        return {
-            "type": "approval_required",
-            "content": payload.get("message") or f"工具 {tool_name} 需要用户确认后才能执行。",
-            "metadata": {
-                "step": step,
-                "tool": tool_name,
-                "args_raw": payload.get("args") or {},
-                "tool_call_id": getattr(msg, "tool_call_id", "") or "",
-                "risk_level": risk_level,
-                "needs_confirmation": True,
-            },
-        }
-
-    async def _stream_react_events(self, messages: list, context: AgentRequestContext) -> AsyncGenerator[dict, None]:
-        yield {
-            "type": "thought",
-            "content": "第 1 步：完成请求理解，进入 LangGraph ReAct 循环。",
-            "metadata": {
-                "phase": "start",
-                "max_steps": self.max_steps,
-                "intent": context.intent.value,
-                "missing_slots": context.missing_slots,
-            },
-        }
-
-        react_agent = self._build_react_agent(context)
-        if not hasattr(react_agent, "astream"):
-            result = await self._execute_agent(messages, context, react_agent=react_agent)
-            yield {"type": "text", "content": result.get("output", "任务已完成")}
-            yield self.exit_controller.done_event(
-                result.get("exit_status", "completed"),
-                result.get("exit_reason", "agent_completed"),
-            )
-            return
-
-        pending_tools: dict[str, tuple[int, str]] = {}
-        blocked_tool_call_ids: set[str] = set()
-        current_step = 0
-        final_text = ""
-        saw_update = False
-
-        try:
-            async for update in react_agent.astream(
-                {"messages": messages},
-                stream_mode="updates",
-                config={"recursion_limit": self.max_steps * 2 + 2},
-            ):
-                saw_update = True
-                for node_name, msg in self._iter_update_messages(update):
-                    if self._is_tool_message(node_name, msg):
-                        call_id = getattr(msg, "tool_call_id", "") or ""
-                        if call_id in blocked_tool_call_ids:
-                            continue
-                        approval_event = self._approval_event_from_tool_message(
-                            msg, pending_tools, current_step
-                        )
-                        if approval_event:
-                            yield approval_event
-                            continue
-                        content = self._message_content(msg)
-                        step, tool_name = self._tool_result_name(msg, pending_tools)
-                        if step == 0:
-                            step = current_step or 1
-                        tool_result_event = {
-                            "type": "tool_result",
-                            "content": f"第 {step} 步：{tool_name} 返回：{_compact_text(content)}",
-                            "metadata": {
-                                "step": step,
-                                "tool": tool_name,
-                                "node": node_name,
-                            },
-                        }
-                        yield tool_result_event
-                        exit_result = self.exit_controller.from_tool_result(
-                            tool_name,
-                            content,
-                            current_step=step,
-                        )
-                        if exit_result:
-                            text_event = exit_result.text_event()
-                            if text_event:
-                                yield text_event
-                            yield exit_result.done_event()
-                            return
-                        continue
-
-                    tool_calls = self._extract_tool_calls(msg)
-                    if tool_calls:
-                        current_step += 1
-                        yield {
-                            "type": "thought",
-                            "content": f"第 {current_step} 步：模型决定调用工具：{'、'.join(call['name'] for call in tool_calls)}。",
-                            "metadata": {
-                                "step": current_step,
-                                "phase": "tool_selection",
-                                "tools": [call["name"] for call in tool_calls],
-                            },
-                        }
-                        for call in tool_calls:
-                            if call["id"]:
-                                pending_tools[call["id"]] = (current_step, call["name"])
-                            call["tool_call_id"] = call["id"]
-                            req = tool_registry.get_call_request(call["name"], call.get("args_raw") or {})
-                            if req:
-                                risk_level = req.risk_level.value
-                                needs_confirmation = req.needs_confirmation
-                                rate_exceeded = req.rate_limit_remaining is not None and req.rate_limit_remaining == 0
-                            else:
-                                risk_level = RiskLevel.MEDIUM.value
-                                needs_confirmation = False
-                                rate_exceeded = False
-                            content = f"第 {current_step} 步：调用 {call['name']}，参数：{call['args']}"
-                            if rate_exceeded:
-                                content += " ⚠️ 该工具已达到速率限制上限，请稍后再试。"
-                            yield {
-                                "type": "tool_call",
-                                "content": content,
-                                "metadata": {
-                                    "step": current_step,
-                                    "tool": call["name"],
-                                    "args": call["args"],
-                                    "args_raw": call.get("args_raw"),
-                                    "tool_call_id": call["id"],
-                                    "risk_level": risk_level,
-                                    "needs_confirmation": needs_confirmation,
-                                    "rate_limit_exceeded": bool(rate_exceeded),
-                                },
-                            }
-                            if needs_confirmation:
-                                if call["id"]:
-                                    blocked_tool_call_ids.add(call["id"])
-                                yield {
-                                    "type": "approval_required",
-                                    "content": f"工具 {call['name']} 需要用户确认后才能执行。",
-                                    "metadata": {
-                                        "step": current_step,
-                                        "tool": call["name"],
-                                        "args_raw": call.get("args_raw") or {},
-                                        "tool_call_id": call["id"],
-                                        "risk_level": risk_level,
-                                        "needs_confirmation": True,
-                                    },
-                                }
-                        continue
-
-                    content = self._message_content(msg)
-                    if content:
-                        final_text = self._clean_final_answer(content)
-                        yield {
-                            "type": "text",
-                            "content": final_text,
-                            "metadata": {"phase": "final_answer", "node": node_name},
-                        }
-
-            if not saw_update:
-                result = await self._execute_agent(messages, context, react_agent=react_agent)
-                final_text = result.get("output", "任务已完成")
-                yield {"type": "text", "content": final_text}
-                yield self.exit_controller.done_event(
-                    result.get("exit_status", "completed"),
-                    result.get("exit_reason", "agent_completed"),
-                )
-                return
-            elif not final_text:
-                yield {"type": "text", "content": "任务已完成。"}
-
-            yield self.exit_controller.completed().done_event()
-        except Exception as e:
-            exit_result = self.exit_controller.from_exception(
-                e,
-                context=context,
-                current_step=current_step,
-            )
-            if exit_result:
-                text_event = exit_result.text_event()
-                if text_event:
-                    yield text_event
-                yield exit_result.done_event()
-                return
-            logger.exception("Agent stream error")
-            yield {"type": "error", "content": f"执行出错: {str(e)}"}
-            yield self.exit_controller.done_event("error", "agent_error")
+        return await self._aexecute_openmanus(
+            message,
+            history=history,
+            scenario=scenario,
+            current_location=current_location,
+        )
 
     async def aexecute_stream(
         self,
@@ -1355,72 +1130,10 @@ class AIAgent:
         scenario: str | None = None,
         current_location: CurrentLocation | dict | None = None,
     ) -> AsyncGenerator[dict, None]:
-        effective_scenario = self._infer_followup_scenario(message, history, scenario)
-        context = understand_request(message, scenario=effective_scenario, current_location=current_location)
-        context.rewritten_query = self._rewrite_user_query(message)
-        await self._inject_memory_context(history, message)
-
-        yield {
-            "type": "thought",
-            "content": "第 0 步：读取会话历史、会话摘要和长期记忆，准备执行 Agent。",
-            "metadata": {
-                "phase": "memory",
-                "intent": context.intent.value,
-                "missing_slots": context.missing_slots,
-            },
-        }
-        yield {
-            "type": "thought",
-            "content": f"第 0 步：已完成 query 改写：{context.rewritten_query}",
-            "metadata": {
-                "phase": "query_rewrite",
-                "raw_query": context.raw_query,
-                "rewritten_query": context.rewritten_query,
-            },
-        }
-        for event in await self._prefetch_current_location_weather(context):
-            yield event
-        weather_answer = self._weather_suitability_text(context)
-        if weather_answer:
-            output, status = weather_answer
-            yield {
-                "type": "text",
-                "content": output,
-                "metadata": {
-                    "phase": "weather_suitability",
-                    "status": status.get("status"),
-                    "should_offer_routes": bool(status.get("suitable")),
-                },
-            }
-            await self._commit_memory(history, message, output, context)
-            yield self.exit_controller.done_event(
-                "completed",
-                "weather_suitability_completed",
-                phase="weather_suitability",
-            )
-            return
-        for event in await self._prefetch_current_location_routes(context, history):
-            yield event
-        route_answer = self._route_recommendation_text(context)
-        if route_answer:
-            output, metadata = route_answer
-            yield {
-                "type": "text",
-                "content": output,
-                "metadata": metadata,
-            }
-            await self._commit_memory(history, message, output, context)
-            yield self.exit_controller.done_event(
-                "completed",
-                "route_recommendation_completed",
-                phase="route_recommendation",
-            )
-            return
-        messages = self._build_messages(context.rewritten_query or message, history)
-        assistant_parts: list[str] = []
-        async for event in self._stream_react_events(messages, context):
-            if event.get("type") == "text":
-                assistant_parts.append(event.get("content", ""))
-            elif event.get("type") == "done":
-                await self._commit_memory(history, message, "".join(assistant_parts).strip(), context)
+        async for event in self._aexecute_stream_openmanus(
+            message,
+            history=history,
+            scenario=scenario,
+            current_location=current_location,
+        ):
             yield event

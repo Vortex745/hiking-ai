@@ -5,111 +5,119 @@ from tools.hiking_domain import geo_lookup, route_research, weather_lookup
 
 
 @pytest.mark.asyncio
-async def test_geo_lookup_supports_amap_reverse_geocode(monkeypatch):
-    monkeypatch.setattr(settings, "amap_api_key", "amap-key")
+async def test_weather_lookup_returns_unavailable_when_mcp_capability_missing(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {}, raising=False)
+    monkeypatch.setattr(settings, "mcp_capability_map", {}, raising=False)
 
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
+    result = await weather_lookup.ainvoke({"destination": "北京", "date": "今天"})
 
-        def json(self):
-            return {
-                "status": "1",
-                "infocode": "10000",
-                "regeocode": {
-                    "formatted_address": "北京市东城区东华门街道",
-                    "addressComponent": {
-                        "province": "北京市",
-                        "city": [],
-                        "district": "东城区",
-                        "adcode": "110101",
-                    },
-                },
-            }
+    assert result["ok"] is False
+    assert result["source"] == "mcp.weather"
+    assert "MCP" in result["message"]
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
 
-        async def __aenter__(self):
-            return self
+@pytest.mark.asyncio
+async def test_weather_lookup_uses_mcp_capability_alias(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {"amap": {"command": "amap-mcp"}}, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "mcp_capability_map",
+        {"weather": {"server": "amap", "tool": "weather"}},
+        raising=False,
+    )
+    calls = []
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    async def fake_resolve(capability, arguments):
+        calls.append((capability, arguments))
+        return {
+            "ok": True,
+            "source": "mcp:amap:weather",
+            "weather": "晴",
+            "temperature": "23",
+        }
 
-        async def get(self, url, params):
-            assert "regeo" in url
-            assert params["location"] == "116.4074,39.9042"
-            return FakeResponse()
+    monkeypatch.setattr("tools.hiking_domain.resolve_hiking_capability", fake_resolve)
 
-    monkeypatch.setattr("tools.hiking_domain.httpx.AsyncClient", FakeClient)
+    result = await weather_lookup.ainvoke({"destination": "北京", "date": "今天"})
+
+    assert result["ok"] is True
+    assert result["source"] == "mcp:amap:weather"
+    assert result["weather"] == "晴"
+    assert calls == [("weather", {
+        "destination": "北京",
+        "date": "今天",
+        "adcode": "",
+        "latitude": None,
+        "longitude": None,
+    })]
+
+
+@pytest.mark.asyncio
+async def test_geo_lookup_returns_unavailable_when_mcp_capability_missing(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {}, raising=False)
+    monkeypatch.setattr(settings, "mcp_capability_map", {}, raising=False)
+
+    result = await geo_lookup.ainvoke({"latitude": 39.9042, "longitude": 116.4074})
+
+    assert result["ok"] is False
+    assert result["source"] == "mcp.reverse_geocode"
+    assert "MCP" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_geo_lookup_uses_mcp_capability_alias(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {"amap": {"command": "amap-mcp"}}, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "mcp_capability_map",
+        {"reverse_geocode": {"server": "amap", "tool": "regeo"}},
+        raising=False,
+    )
+    calls = []
+
+    async def fake_resolve(capability, arguments):
+        calls.append((capability, arguments))
+        return {
+            "ok": True,
+            "source": "mcp:amap:regeo",
+            "primary": {"city": "北京市", "adcode": "110101"},
+        }
+
+    monkeypatch.setattr("tools.hiking_domain.resolve_hiking_capability", fake_resolve)
 
     result = await geo_lookup.ainvoke({"latitude": 39.9042, "longitude": 116.4074})
 
     assert result["ok"] is True
-    assert result["source"] == "amap_regeo"
-    assert result["primary"]["city"] == "北京市"
+    assert result["source"] == "mcp:amap:regeo"
     assert result["primary"]["adcode"] == "110101"
+    assert calls == [("reverse_geocode", {
+        "destination": "",
+        "latitude": 39.9042,
+        "longitude": 116.4074,
+    })]
 
 
 @pytest.mark.asyncio
-async def test_weather_lookup_uses_coordinates_before_amap_weather(monkeypatch):
-    monkeypatch.setattr(settings, "amap_api_key", "amap-key")
+async def test_weather_lookup_passes_coordinates_to_mcp_alias(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {"amap": {"command": "amap-mcp"}}, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "mcp_capability_map",
+        {"weather": {"server": "amap", "tool": "weather"}},
+        raising=False,
+    )
     calls = []
 
-    class FakeResponse:
-        def __init__(self, payload):
-            self.payload = payload
+    async def fake_resolve(capability, arguments):
+        calls.append((capability, arguments))
+        return {
+            "ok": True,
+            "source": "mcp:amap:weather",
+            "weather": "晴",
+            "temperature": "23",
+        }
 
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self.payload
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, params):
-            calls.append((url, params))
-            if "regeo" in url:
-                return FakeResponse({
-                    "status": "1",
-                    "infocode": "10000",
-                    "regeocode": {
-                        "formatted_address": "北京市东城区东华门街道",
-                        "addressComponent": {
-                            "province": "北京市",
-                            "city": [],
-                            "district": "东城区",
-                            "adcode": "110101",
-                        },
-                    },
-                })
-            return FakeResponse({
-                "status": "1",
-                "infocode": "10000",
-                "lives": [{
-                    "province": "北京市",
-                    "city": "东城区",
-                    "adcode": "110101",
-                    "weather": "晴",
-                    "temperature": "23",
-                    "winddirection": "北",
-                    "windpower": "3",
-                    "humidity": "40",
-                    "reporttime": "2026-05-19 16:00:00",
-                }],
-            })
-
-    monkeypatch.setattr("tools.hiking_domain.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("tools.hiking_domain.resolve_hiking_capability", fake_resolve)
 
     result = await weather_lookup.ainvoke({
         "date": "今天",
@@ -118,9 +126,14 @@ async def test_weather_lookup_uses_coordinates_before_amap_weather(monkeypatch):
     })
 
     assert result["ok"] is True
-    assert result["weather"] == "晴"
-    assert calls[0][1]["location"] == "116.4074,39.9042"
-    assert calls[1][1]["city"] == "110101"
+    assert result["source"] == "mcp:amap:weather"
+    assert calls == [("weather", {
+        "destination": "",
+        "date": "今天",
+        "adcode": "",
+        "latitude": 39.9042,
+        "longitude": 116.4074,
+    })]
 
 
 @pytest.mark.asyncio

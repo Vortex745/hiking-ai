@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from agent.agent import AIAgent, validate_tool_configuration
 from config import settings
+from mcp.runtime import get_mcp_runtime
 
 tools_router = APIRouter(prefix="/tools")
 
@@ -12,11 +13,25 @@ def _mcp_configured() -> bool:
 
 def _external_keys_status() -> dict[str, bool]:
     return {
-        "amap_api_key": bool(settings.amap_api_key),
         "openai_api_key": bool(settings.openai_api_key),
         "embedding_api_key": bool(settings.embedding_api_key),
         "rerank_api_key": bool(settings.rerank_api_key),
     }
+
+
+def _mcp_capabilities_status() -> dict[str, dict[str, bool | str]]:
+    capability_map = getattr(settings, "mcp_capability_map", {}) or {}
+    result: dict[str, dict[str, bool | str]] = {}
+    for capability in ("weather", "geocode", "reverse_geocode"):
+        target = capability_map.get(capability) or {}
+        server = target.get("server") if isinstance(target, dict) else ""
+        tool = target.get("tool") if isinstance(target, dict) else ""
+        result[capability] = {
+            "configured": bool(server and tool),
+            "server": server,
+            "tool": tool,
+        }
+    return result
 
 
 @tools_router.get("")
@@ -36,6 +51,7 @@ async def tools_health():
     visible = registry.list_tools(include_hidden=False)
     all_tools = registry.list_all_tools()
     configured = _mcp_configured()
+    runtime_health = get_mcp_runtime().health()
     return {
         "status": "ok",
         "tools_total": len(all_tools),
@@ -44,7 +60,10 @@ async def tools_health():
         "configuration": validate_tool_configuration(),
         "mcp": {
             "configured": configured,
-            "loaded": False,
+            "loaded": runtime_health["loaded"],
+            "servers": runtime_health["servers"],
+            "capabilities": _mcp_capabilities_status(),
+            "errors": runtime_health["errors"],
         },
         "external_keys": _external_keys_status(),
     }

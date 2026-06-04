@@ -31,6 +31,7 @@ func NewRouter(cfg *config.Config) *gin.Engine {
 		api.POST("/chat/sync", chatHandler.ChatSync)
 		api.POST("/chat/sse", chatHandler.ChatSSE)
 		api.GET("/chat/history/:chatId", chatHandler.ChatHistory)
+		api.GET("/artifacts/*filePath", chatHandler.ArtifactDownload)
 
 		api.POST("/models/fetch", modelsHandler.ModelsFetch)
 

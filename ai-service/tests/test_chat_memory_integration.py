@@ -3,7 +3,8 @@ import sys
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+from langchain_core.messages import AIMessage
 
 # Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,6 +21,21 @@ from api.models import RuntimeLlmConfig
 from memory import MemoryManager, MemoryConfig
 
 
+class FakeToolModel:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.bound_tools = []
+
+    def bind_tools(self, tools, tool_choice="auto"):
+        self.bound_tools = tools
+        return self
+
+    def invoke(self, messages):
+        if self.responses:
+            return self.responses.pop(0)
+        return AIMessage(content="任务已完成。")
+
+
 def test_agent_memory_initialization_enabled(monkeypatch):
     """When memory is enabled in settings, AIAgent should initialize a standard MemoryManager with config."""
     monkeypatch.setattr(settings, "memory_enabled", True)
@@ -29,7 +45,7 @@ def test_agent_memory_initialization_enabled(monkeypatch):
     monkeypatch.setattr(settings, "memory_extractor_model", "test-extractor")
 
     # Mock the LLM initialization to avoid calling actual ChatOpenAI
-    with patch("agent.agent.ChatOpenAI"), patch("agent.agent.create_react_agent"):
+    with patch("agent.agent.ChatOpenAI"):
         agent = AIAgent()
         assert agent.memory_manager is not None
         assert isinstance(agent.memory_manager, MemoryManager)
@@ -53,7 +69,6 @@ def test_agent_memory_uses_runtime_llm_config_when_env_key_missing(monkeypatch):
     )
 
     with patch("agent.agent.ChatOpenAI"), \
-         patch("agent.agent.create_react_agent"), \
          patch("memory.memory_manager.SessionCompressor") as mock_compressor, \
          patch("memory.memory_manager.KnowledgeExtractor") as mock_extractor, \
          patch("memory.memory_manager.VectorStore"):
@@ -75,7 +90,7 @@ def test_agent_memory_initialization_disabled(monkeypatch):
     """When memory is disabled in settings, AIAgent should have memory_manager set to None."""
     monkeypatch.setattr(settings, "memory_enabled", False)
 
-    with patch("agent.agent.ChatOpenAI"), patch("agent.agent.create_react_agent"):
+    with patch("agent.agent.ChatOpenAI"):
         agent = AIAgent()
         assert agent.memory_manager is None
 
@@ -86,25 +101,18 @@ def test_chat_sync_endpoint_memory_integration(monkeypatch):
     monkeypatch.setattr(settings, "memory_enabled", True)
     
     dummy_chat_id = "test-chat-sync-123"
-    dummy_message = "测试徒步路线"
+    dummy_message = "随便聊聊"
     
     mock_memory_ctx = {
         "session_context": "Previous route discussed: Route A",
         "knowledge_context": "## 已知的用户信息\n- 喜欢徒步"
     }
 
-    # Patch ChatOpenAI, react agent creation, and memory read/commit.
-    with patch("agent.agent.ChatOpenAI"), \
-         patch("agent.agent.create_react_agent") as mock_create_agent, \
+    fake_llm = FakeToolModel([AIMessage(content="Mocked Sync Response")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm), \
          patch("memory.MemoryManager.build_runtime_context", return_value=mock_memory_ctx) as mock_read, \
          patch("memory.MemoryManager.commit_interaction", return_value=1) as mock_commit:
-        
-        # Mock the react agent's ainvoke method to return a dummy response
-        mock_agent_instance = MagicMock()
-        async def mock_ainvoke(*args, **kwargs):
-            return {"messages": [MagicMock(content="Mocked Sync Response")]}
-        mock_agent_instance.ainvoke = mock_ainvoke
-        mock_create_agent.return_value = mock_agent_instance
 
         client = TestClient(app)
         response = client.post(
@@ -140,17 +148,11 @@ def test_chat_sse_endpoint_memory_integration(monkeypatch):
         "knowledge_context": "## 已知的用户信息\n- User likes hiking"
     }
 
-    with patch("agent.agent.ChatOpenAI"), \
-         patch("agent.agent.create_react_agent") as mock_create_agent, \
+    fake_llm = FakeToolModel([AIMessage(content="Mocked SSE Response")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm), \
          patch("memory.MemoryManager.build_runtime_context", return_value=mock_memory_ctx) as mock_read, \
          patch("memory.MemoryManager.commit_interaction", return_value=1) as mock_commit:
-
-        # Mock the react agent's ainvoke method
-        mock_agent_instance = MagicMock()
-        async def mock_ainvoke(*args, **kwargs):
-            return {"messages": [MagicMock(content="Mocked SSE Response")]}
-        mock_agent_instance.ainvoke = mock_ainvoke
-        mock_create_agent.return_value = mock_agent_instance
 
         client = TestClient(app)
         response = client.post(
@@ -186,16 +188,11 @@ def test_chat_memory_disabled_no_calls(monkeypatch):
     dummy_chat_id = "test-chat-disabled"
     dummy_message = "测试内存关闭"
 
-    with patch("agent.agent.ChatOpenAI"), \
-         patch("agent.agent.create_react_agent") as mock_create_agent, \
+    fake_llm = FakeToolModel([AIMessage(content="Mocked Disabled Response")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm), \
          patch("memory.MemoryManager.build_runtime_context") as mock_read, \
          patch("memory.MemoryManager.commit_interaction") as mock_commit:
-
-        mock_agent_instance = MagicMock()
-        async def mock_ainvoke(*args, **kwargs):
-            return {"messages": [MagicMock(content="Mocked Disabled Response")]}
-        mock_agent_instance.ainvoke = mock_ainvoke
-        mock_create_agent.return_value = mock_agent_instance
 
         client = TestClient(app)
         response = client.post(
@@ -218,16 +215,11 @@ def test_chat_memory_exception_fallback(monkeypatch):
     dummy_chat_id = "test-chat-error"
     dummy_message = "测试内存报错 fallback"
 
-    with patch("agent.agent.ChatOpenAI"), \
-         patch("agent.agent.create_react_agent") as mock_create_agent, \
+    fake_llm = FakeToolModel([AIMessage(content="Mocked Recovery Response")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm), \
          patch("memory.MemoryManager.build_runtime_context", side_effect=RuntimeError("VectorDB Connection Failed")) as mock_read, \
          patch("memory.MemoryManager.commit_interaction", return_value=1) as mock_commit:
-
-        mock_agent_instance = MagicMock()
-        async def mock_ainvoke(*args, **kwargs):
-            return {"messages": [MagicMock(content="Mocked Recovery Response")]}
-        mock_agent_instance.ainvoke = mock_ainvoke
-        mock_create_agent.return_value = mock_agent_instance
 
         client = TestClient(app)
         # Even with memory failure, the API call should succeed with HTTP 200

@@ -67,4 +67,7 @@ def test_tools_health_reports_registry_and_mcp_readiness():
     assert data["hidden_tools"] == 7
     assert data["configuration"]["ok"] is True
     assert data["mcp"]["configured"] is False
-    assert "amap_api_key" in data["external_keys"]
+    assert data["mcp"]["capabilities"]["weather"]["configured"] is False
+    assert data["mcp"]["capabilities"]["geocode"]["configured"] is False
+    assert data["mcp"]["capabilities"]["reverse_geocode"]["configured"] is False
+    assert "amap_api_key" not in data["external_keys"]

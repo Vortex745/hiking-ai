@@ -69,7 +69,14 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
   if (!mounted) return null;
 
   return (
-    <div ref={containerRef} className="absolute top-4 left-4 z-50 flex flex-col w-[260px] max-h-[calc(100vh-88px)] bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left">
+    <>
+      {/* Mobile Backdrop */}
+      <div 
+        className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ease-[var(--ease-out)]"
+        style={{ opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? 'auto' : 'none' }}
+        onClick={onClose}
+      />
+      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left">
       <div className="p-3 border-b border-white/10 flex items-center justify-between">
         <button
           onClick={onNewSession}
@@ -114,5 +121,6 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
         ))}
       </div>
     </div>
+    </>
   );
 };

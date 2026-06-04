@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -65,6 +65,47 @@ class RAGQuery(BaseModel):
     chat_id: Optional[str] = None
     status: Optional[str] = None
     model_settings: Optional[RuntimeModelSettings] = None
+
+
+class FeishuSyncRequest(BaseModel):
+    """同步飞书文档的请求参数。"""
+
+    doc_token: str
+    title: str = ""
+    doc_type: str = "docx"
+
+
+class FeishuDocRef(BaseModel):
+    """已同步的单篇飞书文档摘要。"""
+
+    token: str
+    title: str
+    chunks: int
+    error: Optional[str] = None
+
+
+class FeishuSyncResponse(BaseModel):
+    """同步飞书文档的响应结果。"""
+
+    status: str = "success"
+    documents: list[FeishuDocRef] = Field(default_factory=list)
+
+
+class FeishuDefaultSyncRequest(BaseModel):
+    """从飞书空间/文件夹批量同步文档的请求参数。"""
+
+    space_id: Optional[str] = None
+    folder_token: Optional[str] = None
+    query: str = ""
+
+
+class FeishuDefaultSyncResponse(BaseModel):
+    """批量同步飞书文档的响应结果。"""
+
+    status: str = "success"
+    synced_count: int = 0
+    error_count: int = 0
+    documents: list[FeishuDocRef] = Field(default_factory=list)
 
 
 class SSEEvent(BaseModel):

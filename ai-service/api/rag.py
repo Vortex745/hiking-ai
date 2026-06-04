@@ -20,6 +20,7 @@ from config import settings
 from memory.factory import chat_memory_status, get_chat_memory
 from rag.rewriter import QueryRewriter
 from rag.augmenter import ContextAugmenter, has_relevant_evidence
+from rag.feishu import FeishuDefaultSyncer, FeishuDocLoader, find_feishu_links
 from rag.reranker import Reranker
 from rag.text_processing import clean_display_text
 from runtime_paths import runtime_dir
@@ -205,6 +206,60 @@ def _persist_rag_message(memory, role: str, content: str) -> None:
         logger.warning("RAG chat persistence failed for role=%s: %s", role, exc)
 
 
+def _summarize_feishu_sync(summaries: list[dict]) -> dict:
+    synced_count = sum(1 for item in summaries if not item.get("error") and item.get("chunks", 0) > 0)
+    error_count = sum(1 for item in summaries if item.get("error"))
+    chunk_count = sum(int(item.get("chunks") or 0) for item in summaries)
+    return {
+        "synced_count": synced_count,
+        "error_count": error_count,
+        "chunks": chunk_count,
+        "documents": summaries,
+    }
+
+
+def _sync_feishu_links(question: str, retriever: VectorStoreRetriever) -> tuple[list, list[dict]]:
+    links = find_feishu_links(question)
+    if not links:
+        return [], []
+
+    loader = FeishuDocLoader()
+    syncer = FeishuDefaultSyncer(loader, retriever)
+    summaries: list[dict] = []
+    synced_docs = []
+
+    for link in links:
+        try:
+            if link.kind == "wiki_space":
+                summaries.extend(syncer.sync_from_space(link.token))
+                continue
+
+            docs = loader.load_and_split(link.raw, doc_type=link.doc_type)
+            retriever.add_documents(docs, status="feishu")
+            syncer.synced_documents.extend(docs)
+            synced_docs.extend(docs)
+            title = docs[0].metadata.get("title", link.token) if docs else link.token
+            summaries.append({"token": link.token, "title": title, "chunks": len(docs)})
+        except Exception as exc:
+            logger.warning("Feishu link sync failed: %s", exc)
+            summaries.append({"token": link.token, "title": link.token, "chunks": 0, "error": str(exc)})
+
+    return syncer.synced_documents or synced_docs, summaries
+
+
+def _sync_default_feishu_knowledge(retriever: VectorStoreRetriever) -> tuple[list, list[dict]]:
+    loader = FeishuDocLoader()
+    syncer = FeishuDefaultSyncer(loader, retriever)
+    summaries: list[dict] = []
+
+    if settings.feishu_default_space_id:
+        summaries.extend(syncer.sync_from_space(settings.feishu_default_space_id))
+    if settings.feishu_default_folder_token:
+        summaries.extend(syncer.sync_from_folder(settings.feishu_default_folder_token))
+
+    return syncer.synced_documents, summaries
+
+
 @rag_router.get("/health")
 async def rag_health():
     try:
@@ -222,6 +277,8 @@ async def rag_health():
             "storage": retriever.storage_mode,
             "documents": document_count,
             "rag_docs_api_configured": bool(settings.rag_docs_api_url),
+            "feishu_enabled": settings.feishu_enabled,
+            "feishu_default_configured": settings.feishu_default_configured,
             "memory": chat_memory_status(),
         }
     except Exception as e:
@@ -339,6 +396,68 @@ async def rag_query(req: RAGQuery):
                     )
                 await asyncio.sleep(0.2)
 
+            feishu_docs: list = []
+            feishu_links = find_feishu_links(req.question)
+            if feishu_links and not settings.feishu_enabled:
+                yield _sse_event(
+                    "process",
+                    "检测到飞书链接，但飞书应用凭证未配置，已转入普通知识库检索",
+                    {"link_count": len(feishu_links)},
+                )
+                await asyncio.sleep(0.2)
+                answer = "我检测到了飞书链接，但当前服务没有配置飞书应用凭证，暂时不能读取该文档。请先配置飞书凭证，或把文档导出后上传到知识库。"
+                assistant_parts.append(answer)
+                yield _sse_event("text", answer)
+                _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
+                yield _sse_event("done")
+                return
+            elif feishu_links:
+                yield _sse_event(
+                    "process",
+                    "检测到飞书链接，正在同步飞书文档",
+                    {"link_count": len(feishu_links)},
+                )
+                await asyncio.sleep(0.2)
+                feishu_docs, summaries = _sync_feishu_links(req.question, retriever)
+                sync_summary = _summarize_feishu_sync(summaries)
+                yield _sse_event(
+                    "process",
+                    (
+                        f"已同步飞书文档，获得 {sync_summary['chunks']} 个文档片段"
+                        if sync_summary["chunks"]
+                        else "飞书文档同步未获得文档片段，请检查链接权限"
+                    ),
+                    sync_summary,
+                )
+                await asyncio.sleep(0.2)
+                if not feishu_docs:
+                    answer = "我检测到了飞书链接，但没有同步到可检索的文档内容。请确认飞书应用对该文档有访问权限，或先把文档导出/上传后再问。"
+                    assistant_parts.append(answer)
+                    yield _sse_event("text", answer)
+                    _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
+                    yield _sse_event("done")
+                    return
+            elif (
+                not cloud_docs
+                and settings.feishu_enabled
+                and settings.feishu_default_configured
+                and retriever.document_count() == 0
+            ):
+                yield _sse_event("process", "知识库为空，正在同步默认飞书知识库")
+                await asyncio.sleep(0.2)
+                feishu_docs, summaries = _sync_default_feishu_knowledge(retriever)
+                sync_summary = _summarize_feishu_sync(summaries)
+                yield _sse_event(
+                    "process",
+                    (
+                        f"已同步默认飞书知识库，获得 {sync_summary['chunks']} 个文档片段"
+                        if sync_summary["chunks"]
+                        else "默认飞书知识库同步未获得文档片段，请检查空间/文件夹权限"
+                    ),
+                    sync_summary,
+                )
+                await asyncio.sleep(0.2)
+
             llm_kwargs = _runtime_llm_kwargs_from_settings(req.model_settings)
             rewriter = QueryRewriter(**llm_kwargs)
             try:
@@ -449,7 +568,7 @@ async def rag_query(req: RAGQuery):
             )
             await asyncio.sleep(0.2)
 
-            all_docs = cloud_docs + all_docs
+            all_docs = cloud_docs + feishu_docs + all_docs
             if reranker.enabled and all_docs:
                 yield _sse_event("process", "调用 Rerank 模型重排候选片段")
                 await asyncio.sleep(0.2)
@@ -473,6 +592,7 @@ async def rag_query(req: RAGQuery):
             if (
                 all_docs
                 and not cloud_docs
+                and not feishu_docs
                 and not has_relevant_evidence(req.question, all_docs)
                 and not has_relevant_evidence(humanized_question, all_docs)
             ):

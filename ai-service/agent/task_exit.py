@@ -2,16 +2,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-try:
-    from langgraph.errors import GraphRecursionError
-except Exception:  # pragma: no cover - compatibility fallback for older langgraph
-    GraphRecursionError = None
-
 
 class AgentExitStatus(str, Enum):
     COMPLETED = "completed"
     WAITING_FOR_USER = "waiting_for_user"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    STUCK = "stuck"
     ERROR = "error"
 
 
@@ -53,9 +49,8 @@ class AgentTaskExitController:
 
     _BUDGET_MARKERS = (
         "need more steps",
-        "recursion limit",
-        "recursion_limit",
-        "graphrecursionerror",
+        "max steps",
+        "step budget",
     )
 
     def __init__(self, max_steps: int):
@@ -128,8 +123,6 @@ class AgentTaskExitController:
         )
 
     def _is_budget_exhausted(self, exc: Exception) -> bool:
-        if GraphRecursionError is not None and isinstance(exc, GraphRecursionError):
-            return True
         text = f"{type(exc).__name__} {str(exc)}".lower()
         return any(marker in text for marker in self._BUDGET_MARKERS)
 

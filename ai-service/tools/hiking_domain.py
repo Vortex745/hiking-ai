@@ -8,11 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
 from langchain_core.tools import tool
 
-from config import settings
-from tools.pdf_generation import generate_pdf
+from mcp.capabilities import resolve_hiking_capability
+from tools.pdf_generation import artifact_metadata, generate_pdf
 from tools.web_search import web_search
 from runtime_paths import runtime_dir
 
@@ -36,7 +35,9 @@ def _safe_filename(value: str, suffix: str) -> str:
 def _resolve_workspace_path(path: str) -> Path:
     target = (WORKSPACE_DIR / path).resolve()
     workspace = WORKSPACE_DIR.resolve()
-    if not str(target).startswith(str(workspace)):
+    try:
+        target.relative_to(workspace)
+    except ValueError:
         raise ValueError("文件路径超出 workspace 范围")
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
@@ -80,89 +81,6 @@ def _route_reason(name: str, search_text: str) -> str:
     return "来自搜索摘要的候选路线，出发前仍需核验开放状态、里程和爬升。"
 
 
-AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
-AMAP_REVERSE_GEO_URL = "https://restapi.amap.com/v3/geocode/regeo"
-
-WIND_DIRECTION_MAP: dict[str, str] = {
-    "北": "N",
-    "东北": "NE",
-    "东": "E",
-    "东南": "SE",
-    "南": "S",
-    "西南": "SW",
-    "西": "W",
-    "西北": "NW",
-}
-
-
-def _parse_amap_weather(response: dict, destination: str, date: str | None) -> dict[str, Any]:
-    lives = response.get("lives", [])
-    forecasts = response.get("forecasts", [])
-
-    if lives:
-        live = lives[0]
-        return {
-            "ok": True,
-            "destination": destination,
-            "date": date or "未指定",
-            "queried_at": _now_iso(),
-            "source": "amap_weather",
-            "province": live.get("province", ""),
-            "city": live.get("city", destination),
-            "adcode": live.get("adcode", ""),
-            "weather": live.get("weather", ""),
-            "temperature": f"{live.get('temperature', '')}°C",
-            "wind_direction": live.get("winddirection", ""),
-            "wind_power": live.get("windpower", ""),
-            "humidity": f"{live.get('humidity', '')}%",
-            "report_time": live.get("reporttime", ""),
-            "forecast": [],
-        }
-
-    if forecasts:
-        forecast_data = forecasts[0]
-        casts = forecast_data.get("casts", [])
-        forecast_list: list[dict] = []
-        for cast in casts:
-            forecast_list.append({
-                "date": cast.get("date", ""),
-                "week": cast.get("week", ""),
-                "day_weather": cast.get("dayweather", ""),
-                "night_weather": cast.get("nightweather", ""),
-                "day_temp": f"{cast.get('daytemp', '')}°C",
-                "night_temp": f"{cast.get('nighttemp', '')}°C",
-                "day_wind": cast.get("daywind", ""),
-                "night_wind": cast.get("nightwind", ""),
-                "day_power": cast.get("daypower", ""),
-                "night_power": cast.get("nightpower", ""),
-            })
-
-        today = casts[0] if casts else {}
-        return {
-            "ok": True,
-            "destination": destination,
-            "date": date or "未指定",
-            "queried_at": _now_iso(),
-            "source": "amap_weather",
-            "province": forecast_data.get("province", ""),
-            "city": forecast_data.get("city", destination),
-            "adcode": forecast_data.get("adcode", ""),
-            "weather": today.get("dayweather", ""),
-            "temperature": f"{today.get('daytemp', '')}°C ~ {today.get('nighttemp', '')}°C",
-            "wind_direction": today.get("daywind", ""),
-            "wind_power": today.get("daypower", ""),
-            "humidity": "未知（预报模式不含湿度）",
-            "report_time": forecast_data.get("reporttime", ""),
-            "forecast": forecast_list,
-        }
-
-    return {
-        "ok": False,
-        "destination": destination,
-        "message": "高德天气 API 返回数据为空，请检查目的地名称是否正确。",
-    }
-
-
 @tool
 async def weather_lookup(
     destination: str | None = None,
@@ -178,178 +96,16 @@ async def weather_lookup(
     destination = (destination or "").strip()
     adcode = (adcode or "").strip()
 
-    if not settings.amap_api_key:
-        logger.warning("AMAP_API_KEY 未配置，返回占位数据")
-        return {
-            "ok": True,
-            "destination": destination or adcode or "当前位置",
-            "date": date or "未指定",
-            "queried_at": _now_iso(),
-            "source": "weather_lookup.placeholder",
-            "temperature": "未接入实时天气 API",
-            "precipitation": "未知",
-            "wind": "未知",
-            "alerts": [],
-            "message": "AMAP_API_KEY 未配置；请在 .env 中设置后重试。",
-        }
+    if not (destination or adcode or (latitude is not None and longitude is not None)):
+        return {"ok": False, "source": "mcp.weather", "message": "缺少目的地或定位坐标，无法查询天气。"}
 
-    if not (destination or adcode) and latitude is not None and longitude is not None:
-        geo_result = await _reverse_geocode(longitude=longitude, latitude=latitude)
-        if geo_result.get("ok"):
-            primary = geo_result.get("primary") or {}
-            adcode = str(primary.get("adcode") or "")
-            destination = str(primary.get("city") or primary.get("district") or primary.get("name") or "")
-
-    if not (destination or adcode):
-        return {"ok": False, "message": "缺少目的地或定位坐标，无法查询天气。"}
-
-    extensions = "base" if date else "all"
-    params: dict[str, str] = {
-        "key": settings.amap_api_key,
-        "city": adcode or destination,
-        "extensions": extensions,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(AMAP_WEATHER_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-        if data.get("status") != "1" or int(data.get("infocode", "0")) != 10000:
-            logger.warning("高德天气 API 返回异常: %s", data)
-            return {
-                "ok": False,
-                "destination": destination,
-                "message": f"高德天气 API 查询失败: {data.get('info', '未知错误')}",
-            }
-
-        result = _parse_amap_weather(data, destination or adcode or "当前位置", date)
-
-        if not result.get("ok"):
-            logger.warning("目的地 '%s' 天气数据为空", destination)
-        else:
-            logger.info("已获取目的地 '%s' 的天气数据", destination)
-
-        return result
-
-    except httpx.HTTPError as e:
-        logger.error("高德天气 API 请求失败: %s", e)
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": f"高德天气 API 网络请求失败: {str(e)}",
-        }
-    except Exception as e:
-        logger.exception("天气查询异常")
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": f"天气查询异常: {str(e)}",
-        }
-
-
-AMAP_GEO_URL = "https://restapi.amap.com/v3/geocode/geo"
-
-
-def _parse_amap_geo(response: dict, destination: str) -> dict[str, Any]:
-    geocodes = response.get("geocodes", [])
-    if not geocodes:
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": f"高德地理编码未找到「{destination}」的结果，请检查地名是否正确。",
-        }
-
-    candidates: list[dict] = []
-    for geo in geocodes:
-        location = geo.get("location", "")
-        lng, lat = (location.split(",") + ["", ""])[:2] if location else ("", "")
-        formatted_address = geo.get("formatted_address", "")
-        province = geo.get("province", "")
-        city = geo.get("city", "")
-        district = geo.get("district", "")
-        adcode = geo.get("adcode", "")
-        level = geo.get("level", "")
-
-        candidates.append({
-            "name": formatted_address or destination,
-            "province": province,
-            "city": city if city else province,
-            "district": district,
-            "adcode": adcode,
-            "coordinates": {"lng": lng, "lat": lat} if lng and lat else None,
-            "level": level,
-        })
-
-    first = candidates[0]
-    terrain = "山地/丘陵可能性较高" if any(x in destination for x in ("山", "峰", "岭", "峡谷")) else "地形待核验"
-
-    return {
-        "ok": True,
+    return await resolve_hiking_capability("weather", {
         "destination": destination,
-        "queried_at": _now_iso(),
-        "source": "amap_geo",
-        "candidates": candidates,
-        "primary": first,
-        "terrain": terrain,
-    }
-
-
-def _parse_amap_regeo(response: dict, destination: str) -> dict[str, Any]:
-    regeocode = response.get("regeocode") or {}
-    address_component = regeocode.get("addressComponent") or {}
-    if not regeocode:
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": "高德逆地理编码未找到当前位置结果。",
-        }
-
-    province = address_component.get("province", "")
-    city = address_component.get("city") or province
-    district = address_component.get("district", "")
-    adcode = address_component.get("adcode", "")
-    formatted_address = regeocode.get("formatted_address", "")
-    primary = {
-        "name": formatted_address or district or city or destination,
-        "province": province,
-        "city": city,
-        "district": district,
+        "date": date,
         "adcode": adcode,
-        "coordinates": None,
-        "level": "street",
-    }
-
-    return {
-        "ok": True,
-        "destination": destination,
-        "queried_at": _now_iso(),
-        "source": "amap_regeo",
-        "candidates": [primary],
-        "primary": primary,
-        "terrain": "地形待核验",
-    }
-
-
-async def _reverse_geocode(longitude: float, latitude: float) -> dict[str, Any]:
-    params: dict[str, str] = {
-        "key": settings.amap_api_key,
-        "location": f"{longitude},{latitude}",
-        "extensions": "base",
-    }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(AMAP_REVERSE_GEO_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-    if data.get("status") != "1" or int(data.get("infocode", "0")) != 10000:
-        return {
-            "ok": False,
-            "destination": "当前位置",
-            "message": f"高德逆地理编码 API 查询失败: {data.get('info', '未知错误')}",
-        }
-    return _parse_amap_regeo(data, "当前位置")
+        "latitude": latitude,
+        "longitude": longitude,
+    })
 
 
 @tool
@@ -365,89 +121,14 @@ async def geo_lookup(
     destination = (destination or "").strip()
     has_coordinates = latitude is not None and longitude is not None
     if not destination and not has_coordinates:
-        return {"ok": False, "message": "缺少目的地或定位坐标，无法查询地理位置。"}
+        return {"ok": False, "source": "mcp.geocode", "message": "缺少目的地或定位坐标，无法查询地理位置。"}
 
-    if not settings.amap_api_key:
-        logger.warning("AMAP_API_KEY 未配置，返回占位数据")
-        terrain = "山地/丘陵可能性较高" if any(x in destination for x in ("山", "峰", "岭", "峡谷")) else "地形待核验"
-        return {
-            "ok": True,
-            "destination": destination or "当前位置",
-            "queried_at": _now_iso(),
-            "source": "geo_lookup.placeholder",
-            "candidates": [{
-                "name": destination or "当前位置",
-                "coordinates": {"lng": longitude, "lat": latitude} if has_coordinates else None,
-                "elevation": None,
-            }],
-            "terrain": terrain,
-            "message": "AMAP_API_KEY 未配置；请在 .env 中设置后重试。",
-        }
-
-    if has_coordinates:
-        try:
-            result = await _reverse_geocode(longitude=longitude, latitude=latitude)
-            if result.get("ok"):
-                primary = result.get("primary") or {}
-                primary["coordinates"] = {"lng": longitude, "lat": latitude}
-            return result
-        except httpx.HTTPError as e:
-            logger.error("高德逆地理编码 API 请求失败: %s", e)
-            return {
-                "ok": False,
-                "destination": destination or "当前位置",
-                "message": f"高德逆地理编码 API 网络请求失败: {str(e)}",
-            }
-        except Exception as e:
-            logger.exception("逆地理编码查询异常")
-            return {
-                "ok": False,
-                "destination": destination or "当前位置",
-                "message": f"逆地理编码查询异常: {str(e)}",
-            }
-
-    params: dict[str, str] = {
-        "key": settings.amap_api_key,
-        "address": destination,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(AMAP_GEO_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-        if data.get("status") != "1" or int(data.get("infocode", "0")) != 10000:
-            logger.warning("高德地理编码 API 返回异常: %s", data)
-            return {
-                "ok": False,
-                "destination": destination,
-                "message": f"高德地理编码 API 查询失败: {data.get('info', '未知错误')}",
-            }
-
-        result = _parse_amap_geo(data, destination)
-
-        if not result.get("ok"):
-            logger.warning("目的地 '%s' 地理编码数据为空", destination)
-        else:
-            logger.info("已获取目的地 '%s' 的地理编码数据", destination)
-
-        return result
-
-    except httpx.HTTPError as e:
-        logger.error("高德地理编码 API 请求失败: %s", e)
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": f"高德地理编码 API 网络请求失败: {str(e)}",
-        }
-    except Exception as e:
-        logger.exception("地理编码查询异常")
-        return {
-            "ok": False,
-            "destination": destination,
-            "message": f"地理编码查询异常: {str(e)}",
-        }
+    capability = "reverse_geocode" if has_coordinates else "geocode"
+    return await resolve_hiking_capability(capability, {
+        "destination": destination,
+        "latitude": latitude,
+        "longitude": longitude,
+    })
 
 
 @tool
@@ -622,18 +303,37 @@ async def trip_report_export(
     md_path = _resolve_workspace_path(md_name)
     markdown = content if content.lstrip().startswith("#") else f"# {title}\n\n{content}"
     md_path.write_text(markdown, encoding="utf-8")
+    markdown_artifact = artifact_metadata(
+        md_path,
+        title=title,
+        kind="markdown",
+        mime_type="text/markdown; charset=utf-8",
+    )
+    artifacts: list[dict[str, Any]] = []
+    if normalized_format in {"markdown", "md", "both"}:
+        artifacts.append(markdown_artifact)
 
     result: dict[str, Any] = {
         "ok": True,
         "title": title,
         "format": normalized_format,
-        "markdown_path": str(md_path),
-        "summary": f"Markdown 已生成：{md_path.name}",
+        "markdown_artifact": markdown_artifact,
+        "artifacts": artifacts,
+        "summary": (
+            f"Markdown 已生成：{markdown_artifact['filename']}"
+            if artifacts
+            else "导出内容已准备"
+        ),
     }
 
     if normalized_format in {"pdf", "both"}:
         pdf_result = await generate_pdf.ainvoke({"title": title, "content": markdown})
         result["pdf_result"] = pdf_result
-        result["summary"] += "；PDF 生成流程已执行。"
+        if isinstance(pdf_result, dict) and pdf_result.get("ok") and isinstance(pdf_result.get("artifact"), dict):
+            artifacts.append(pdf_result["artifact"])
+            result["summary"] += f"；PDF 已生成：{pdf_result['artifact']['filename']}。"
+        else:
+            message = pdf_result.get("message") if isinstance(pdf_result, dict) else str(pdf_result)
+            result["summary"] += f"；{message}"
 
     return result

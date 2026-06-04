@@ -41,6 +41,15 @@ module.exports = {
         sm: '0 1px 3px rgba(0,0,0,0.08)',
         md: '0 4px 12px rgba(0,0,0,0.1)',
       },
+      animation: {
+        shimmer: 'shimmer 2.5s ease-in-out infinite',
+      },
+      keyframes: {
+        shimmer: {
+          '0%': { backgroundPosition: '200% center' },
+          '100%': { backgroundPosition: '-200% center' },
+        },
+      },
     },
   },
   plugins: [],

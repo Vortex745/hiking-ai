@@ -82,6 +82,10 @@ test('agent trace events stay out of primary assistant text', () => {
 test('artifact events render in artifact area', () => {
   assert.match(source, /else if \(event\.type === 'artifact'\) \{\s*appendArtifact\(event\)/s)
   assert.match(source, /msg\.artifacts && msg\.artifacts\.length > 0/)
+  assert.match(geminiThreadSource, /Download/)
+  assert.match(geminiThreadSource, /metadata\.download_url/)
+  assert.match(geminiThreadSource, /download=\{filename\}/)
+  assert.match(geminiThreadSource, /href=\{downloadUrl\}/)
 })
 
 test('agent empty streaming state uses RAG thinking animation', () => {
@@ -104,6 +108,12 @@ test('Agent and RAG stream text through the client-side typewriter queue', () =>
   assert.match(ragSource, /createTypewriterStreamQueue/)
   assert.match(ragSource, /textStream\.enqueue\(event\.content\)/)
   assert.match(ragSource, /textStream\.finishWhenIdle\(finishStreaming\)/)
+})
+
+test('Agent and RAG messages render markdown emphasis as bold text', () => {
+  assert.match(geminiThreadSource, /const MARKDOWN_BOLD_PATTERN = \/\(\\\*\\\*\(\?=\\S\)\[\\s\\S\]\*\?\\S\\\*\\\*\)\/g/)
+  assert.match(geminiThreadSource, /raw\.split\(MARKDOWN_BOLD_PATTERN\)/)
+  assert.match(geminiThreadSource, /<strong key=\{i\} className="font-bold">/)
 })
 
 test('legacy ChatRoom keeps a stable chat id for Redis-backed history', () => {
