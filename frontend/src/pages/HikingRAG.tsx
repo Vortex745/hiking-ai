@@ -3,7 +3,7 @@ import { MessageSquare, Trash2, Menu, X } from 'lucide-react'
 import { API } from '../api/config'
 import { createStreamConnection, SSEEvent } from '../api/sse'
 import { createTypewriterStreamQueue } from '../api/typewriterStream'
-import { buildRagQueryPayload, buildRuntimeModelSettings } from '../api/llmConfig'
+import { buildRagQueryPayload } from '../api/llmConfig'
 import { applyRagStreamEvent, RagSearchSummary } from '../api/ragStream'
 import ConversationMemoryMeter from '../components/ConversationMemoryMeter'
 import { useExternalStoreRuntime, AssistantRuntimeProvider, ThreadMessage } from "@assistant-ui/react"
@@ -155,7 +155,6 @@ function HikingRAG() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const chatIdRef = useRef(getOrCreateChatId())
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Persist messages
   useEffect(() => {
@@ -412,67 +411,6 @@ function HikingRAG() {
     }
   }, [input, isSending, activeSessionId, appendToLastMessage, applyStreamEventToLastMessage, finalizeStreaming, textStream])
 
-  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const inputEl = event.currentTarget
-    const file = inputEl.files?.[0]
-    inputEl.value = ''
-    if (!file || isSending) return
-
-    if (!activeSessionId) {
-      setActiveSessionId(generateId())
-    }
-
-    setIsSending(true)
-    setConnectionStatus('connected')
-
-    const now = new Date()
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
-    setMessages(prev => [
-      ...prev,
-      { role: 'user', content: `上传文档：${file.name}`, time: timeStr },
-      { role: 'assistant', content: `正在上传 ${file.name}...`, isStreaming: true },
-    ])
-
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('status', 'upload')
-      formData.append('model_settings', JSON.stringify(buildRuntimeModelSettings()))
-
-      const response = await fetch(API.ragUpload, {
-        method: 'POST',
-        body: formData,
-      })
-      const payload = await response.json().catch(() => ({})) as {
-        filename?: string
-        chunks?: number
-        detail?: string
-      }
-
-      if (!response.ok) {
-        throw new Error(payload.detail || `上传失败：HTTP ${response.status}`)
-      }
-
-      const filename = payload.filename || file.name
-      const chunks = typeof payload.chunks === 'number' ? payload.chunks : 0
-      updateLastAssistant(last => ({
-        ...last,
-        content: `已上传 ${filename}，切分为 ${chunks} 个知识片段，可继续提问。`,
-        isStreaming: false,
-      }))
-      setConnectionStatus('connected')
-    } catch (error) {
-      updateLastAssistant(last => ({
-        ...last,
-        content: `[上传失败] ${error instanceof Error ? error.message : '请求失败'}`,
-        isStreaming: false,
-      }))
-      setConnectionStatus('error')
-    } finally {
-      setIsSending(false)
-    }
-  }, [activeSessionId, isSending, updateLastAssistant])
-
   /** Regenerate: remove the last assistant response, re-send the last user prompt */
   const handleRegenerate = useCallback(() => {
     if (isSending) return
@@ -519,13 +457,6 @@ function HikingRAG() {
 
         {/* Main Gemini Thread Area */}
         <div className="flex-1 flex flex-col relative overflow-hidden bg-transparent">
-          <input
-            ref={fileInputRef}
-            type="file"
-            name="file"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
           {/* Header Toggle Button */}
           {!sidebarOpen && (
             <button
@@ -539,7 +470,6 @@ function HikingRAG() {
           <GeminiThread
             emptyTitle="徒步知识问答，有什么我可以帮您？"
             onRegenerate={handleRegenerate}
-            onUploadClick={() => fileInputRef.current?.click()}
             realMessageCount={messages.length}
           />
         </div>

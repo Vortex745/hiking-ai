@@ -50,10 +50,17 @@ test('floating conversation sidebar gives icon-only buttons accessible names', (
   assert.match(floatingSidebarSource, /title="删除对话"/)
 })
 
-test('floating conversation sidebar keeps text readable over light chat content', () => {
-  assert.match(floatingSidebarSource, /bg-\[#202124\]\/95/)
+test('floating conversation sidebar matches the active switch background', () => {
+  assert.match(appSource, /isActive \? 'bg-white\/20 text-white shadow-sm'/)
+  assert.match(floatingSidebarSource, /bg-white\/20/)
   assert.match(floatingSidebarSource, /bg-white text-\[#202124\]/)
   assert.match(floatingSidebarSource, /text-white\/80 mt-0\.5/)
+})
+
+test('shared message thread keeps the app theme background unchanged', () => {
+  assert.match(geminiThreadSource, /dark:bg-\[#131314\]/)
+  assert.match(geminiThreadSource, /dark:from-\[#131314\]/)
+  assert.match(geminiThreadSource, /dark:via-\[#131314\]/)
 })
 
 test('homepage hero content stays above the decorative video layer', () => {
@@ -114,12 +121,11 @@ test('RAG page hydrates persisted server history by stable chat id', () => {
   assert.match(ragSource, /buildRagQueryPayload\(text, null, undefined, chatId\)/)
 })
 
-test('RAG page exposes a visible document upload action', () => {
-  assert.match(ragSource, /ref=\{fileInputRef\}/)
-  assert.match(ragSource, /type="file"/)
-  assert.match(ragSource, /name="file"/)
-  assert.match(ragSource, /onChange=\{handleFileUpload\}/)
-  assert.match(ragSource, /onUploadClick=\{\(\) => fileInputRef\.current\?\.click\(\)\}/)
+test('RAG page does not expose a document upload action', () => {
+  assert.doesNotMatch(ragSource, /fileInputRef/)
+  assert.doesNotMatch(ragSource, /handleFileUpload/)
+  assert.doesNotMatch(ragSource, /type="file"/)
+  assert.doesNotMatch(ragSource, /onUploadClick=\{/)
   assert.match(geminiThreadSource, /onUploadClick\?: \(\) => void/)
   assert.match(geminiThreadSource, /Paperclip/)
   assert.match(geminiThreadSource, /title="上传文档"/)

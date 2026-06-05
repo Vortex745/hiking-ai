@@ -75,7 +75,7 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
         style={{ opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? 'auto' : 'none' }}
         onClick={onClose}
       />
-      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-[#202124]/95 hover:bg-[#202124] transition-colors duration-150 ease-[var(--ease-out)] backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left p-2">
+      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-white/20 transition-colors duration-150 ease-[var(--ease-out)] backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left p-2">
       <div className="p-2 mb-1 flex items-center justify-between">
         <button
           onClick={onNewSession}
