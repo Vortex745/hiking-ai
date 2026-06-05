@@ -33,6 +33,13 @@ type BrowserLocation = {
   accuracy?: number
   source: 'browser'
 }
+type ToolConfirmationAction = 'confirm' | 'reject'
+type ToolConfirmationResponse = {
+  status?: string
+  confirmation_id?: string
+  tool_name?: string
+  tool_result?: Record<string, unknown>
+}
 
 function shouldRequestCurrentLocation(text: string) {
   return /天气|适合|能去|可以去|徒步吗|去徒步|附近|周边|当前位置|我这里|我这边/.test(text)
@@ -100,6 +107,18 @@ function normalizeServerMessages(payload: unknown): Message[] {
       return { role, content } as Message
     })
     .filter((item): item is Message => item !== null)
+}
+
+function formatConfirmedToolResult(toolResult: Record<string, unknown>) {
+  if (toolResult.ok === false) {
+    return typeof toolResult.error === 'string' && toolResult.error
+      ? `工具执行失败: ${toolResult.error}`
+      : '工具执行失败'
+  }
+  const result = toolResult.result
+  if (typeof result === 'string') return result
+  if (result === null || result === undefined) return '工具已执行'
+  return JSON.stringify(result)
 }
 
 function generateId() {
@@ -355,6 +374,94 @@ function SuperAgent() {
     })
   }, [])
 
+  const updateConfirmationTrace = useCallback((confirmationId: string, metadataPatch: Record<string, unknown>) => {
+    setMessages(prev => prev.map(message => {
+      if (!message.traceEvents?.length) return message
+      let changed = false
+      const traceEvents = message.traceEvents.map(event => {
+        if (event.metadata?.confirmation_id !== confirmationId) return event
+        changed = true
+        return {
+          ...event,
+          metadata: {
+            ...(event.metadata || {}),
+            ...metadataPatch,
+          },
+        }
+      })
+      return changed ? { ...message, traceEvents } : message
+    }))
+  }, [])
+
+  const appendConfirmedToolResult = useCallback((confirmationId: string, response: ToolConfirmationResponse) => {
+    const toolResult = response.tool_result
+    if (!toolResult) return
+
+    const toolName = response.tool_name
+      || (typeof toolResult.tool_name === 'string' ? toolResult.tool_name : 'tool')
+    const resultEvent: AgentTraceEvent = {
+      type: 'tool_result',
+      content: formatConfirmedToolResult(toolResult),
+      metadata: {
+        ...toolResult,
+        tool: toolName,
+        confirmation_id: confirmationId,
+        confirmation_status: response.status || 'confirmed',
+      },
+    }
+
+    setMessages(prev => prev.map(message => {
+      const traceEvents = message.traceEvents || []
+      const hasConfirmation = traceEvents.some(event => event.metadata?.confirmation_id === confirmationId)
+      const alreadyAppended = traceEvents.some(event =>
+        event.type === 'tool_result' && event.metadata?.confirmation_id === confirmationId
+      )
+      if (!hasConfirmation || alreadyAppended) return message
+      return { ...message, traceEvents: [...traceEvents, resultEvent] }
+    }))
+  }, [])
+
+  const handleToolConfirmation = useCallback(async (
+    confirmationId: string,
+    action: ToolConfirmationAction,
+  ) => {
+    updateConfirmationTrace(confirmationId, {
+      confirmation_status: action === 'confirm' ? 'confirming' : 'rejecting',
+      confirmation_action: action,
+    })
+
+    try {
+      const response = await fetch(API.chatConfirm, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          confirmation_id: confirmationId,
+          action,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`确认请求失败: ${response.status}`)
+      }
+
+      const data = await response.json() as ToolConfirmationResponse
+      updateConfirmationTrace(confirmationId, {
+        confirmation_status: data.status || action,
+        confirmation_action: action,
+      })
+      if (action === 'confirm') {
+        appendConfirmedToolResult(confirmationId, data)
+      }
+    } catch (error) {
+      updateConfirmationTrace(confirmationId, {
+        confirmation_status: 'error',
+        confirmation_error: error instanceof Error ? error.message : '确认请求失败',
+      })
+    }
+  }, [appendConfirmedToolResult, updateConfirmationTrace])
+
   const finalizeStreaming = useCallback(() => {
     setMessages(prev => {
       const updated = [...prev]
@@ -590,6 +697,7 @@ function SuperAgent() {
           <GeminiThread
             emptyTitle="告诉我你的徒步计划，我将为你规划路线、安排任务，并提供安全建议。"
             onRegenerate={handleRegenerate}
+            onConfirmTool={handleToolConfirmation}
             realMessageCount={messages.length}
           />
         </div>

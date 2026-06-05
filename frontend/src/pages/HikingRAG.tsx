@@ -412,28 +412,10 @@ function HikingRAG() {
     }
   }, [input, isSending, activeSessionId, appendToLastMessage, applyStreamEventToLastMessage, finalizeStreaming, textStream])
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  const handleClear = () => {
-    setMessages([])
-    const oldChatId = chatIdRef.current
-    try {
-      void fetch(API.ragHistory(oldChatId), { method: 'DELETE' })
-      localStorage.removeItem(STORAGE_KEY)
-      const next = createChatId()
-      localStorage.setItem(CHAT_ID_KEY, next)
-      chatIdRef.current = next
-    } catch { /* ignore */ }
-  }
-
   const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
+    const inputEl = event.currentTarget
+    const file = inputEl.files?.[0]
+    inputEl.value = ''
     if (!file || isSending) return
 
     if (!activeSessionId) {
@@ -443,12 +425,13 @@ function HikingRAG() {
     setIsSending(true)
     setConnectionStatus('connected')
 
-    const uploadingMessage: Message = {
-      role: 'assistant',
-      content: `正在上传 ${file.name}...`,
-      isStreaming: true,
-    }
-    setMessages(prev => [...prev, uploadingMessage])
+    const now = new Date()
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', content: `上传文档：${file.name}`, time: timeStr },
+      { role: 'assistant', content: `正在上传 ${file.name}...`, isStreaming: true },
+    ])
 
     try {
       const formData = new FormData()
@@ -460,23 +443,28 @@ function HikingRAG() {
         method: 'POST',
         body: formData,
       })
-      const payload = await response.json().catch(() => null)
-
-      if (!response.ok) {
-        const detail = payload?.detail || payload?.error || `${response.status} ${response.statusText}`
-        throw new Error(detail)
+      const payload = await response.json().catch(() => ({})) as {
+        filename?: string
+        chunks?: number
+        detail?: string
       }
 
-      const chunks = typeof payload?.chunks === 'number' ? payload.chunks : 0
+      if (!response.ok) {
+        throw new Error(payload.detail || `上传失败：HTTP ${response.status}`)
+      }
+
+      const filename = payload.filename || file.name
+      const chunks = typeof payload.chunks === 'number' ? payload.chunks : 0
       updateLastAssistant(last => ({
         ...last,
-        content: `已上传 ${file.name}，切分 ${chunks} 个片段。现在可以围绕这份文档提问。`,
+        content: `已上传 ${filename}，切分为 ${chunks} 个知识片段，可继续提问。`,
         isStreaming: false,
       }))
+      setConnectionStatus('connected')
     } catch (error) {
       updateLastAssistant(last => ({
         ...last,
-        content: `上传失败：${error instanceof Error ? error.message : '请稍后重试'}`,
+        content: `[上传失败] ${error instanceof Error ? error.message : '请求失败'}`,
         isStreaming: false,
       }))
       setConnectionStatus('error')
@@ -537,7 +525,6 @@ function HikingRAG() {
             name="file"
             className="hidden"
             onChange={handleFileUpload}
-            aria-label="上传 RAG 文档"
           />
           {/* Header Toggle Button */}
           {!sidebarOpen && (

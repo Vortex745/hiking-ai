@@ -6,6 +6,8 @@ export const API = {
   chatSSE: `${API_BASE}/chat/sse`,
   chatSync: `${API_BASE}/chat/sync`,
   chatHealth: `${API_BASE}/chat/health`,
+  chatConfirm: `${API_BASE}/chat/confirm`,
+  chatPending: (chatId: string) => `${API_BASE}/chat/pending/${encodeURIComponent(chatId)}`,
   chatHistory: (chatId: string) => `${API_BASE}/chat/history/${encodeURIComponent(chatId)}`,
 
   modelsFetch: `${API_BASE}/models/fetch`,

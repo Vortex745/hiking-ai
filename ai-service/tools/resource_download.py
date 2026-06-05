@@ -36,8 +36,11 @@ async def resource_download(url: str, save_path: str | None = None) -> str:
                 allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
                 return f"不允许下载该文件类型: {ext or '无扩展名'}（允许: {allowed}）"
 
-            file_path = (WORKSPACE_DIR / save_path).resolve()
-            if not str(file_path).startswith(str(WORKSPACE_DIR.resolve())):
+            workspace = WORKSPACE_DIR.resolve()
+            file_path = (workspace / save_path).resolve()
+            try:
+                file_path.relative_to(workspace)
+            except ValueError:
                 return "保存路径超出 workspace 范围"
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(content)

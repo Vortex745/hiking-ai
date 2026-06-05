@@ -85,6 +85,19 @@ func (h *ChatHandler) ChatHistory(c *gin.Context) {
 	proxyRequest(c, http.MethodGet, url, nil)
 }
 
+// ChatConfirm forwards a high-risk tool confirmation request to the AI service.
+func (h *ChatHandler) ChatConfirm(c *gin.Context) {
+	url := fmt.Sprintf("%s/api/v1/chat/confirm", h.aiServiceURL)
+	proxyRequest(c, http.MethodPost, url, c.Request.Body)
+}
+
+// ChatPending forwards a pending confirmation lookup to the AI service.
+func (h *ChatHandler) ChatPending(c *gin.Context) {
+	chatID := c.Param("chatId")
+	url := fmt.Sprintf("%s/api/v1/chat/pending/%s", h.aiServiceURL, url.PathEscape(chatID))
+	proxyRequest(c, http.MethodGet, url, nil)
+}
+
 // ArtifactDownload forwards generated workspace artifact downloads to the AI service.
 func (h *ChatHandler) ArtifactDownload(c *gin.Context) {
 	filePath := strings.TrimPrefix(c.Param("filePath"), "/")

@@ -5,7 +5,7 @@ import {
   MessagePrimitive,
   useMessage,
 } from "@assistant-ui/react";
-import { ArrowUp, RotateCw, Copy, Check, MoreHorizontal, Pin, PinOff, GripHorizontal, Paperclip, Download } from 'lucide-react';
+import { ArrowUp, RotateCw, Copy, Check, X, MoreHorizontal, Pin, PinOff, GripHorizontal, Paperclip, Download } from 'lucide-react';
 import { getConversationMemoryProgress } from '../../../api/conversationMemory';
 import { useRef, useState, createContext, useContext, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import gsap from 'gsap';
@@ -18,6 +18,7 @@ interface GeminiThreadProps {
   /** Called when user clicks "regenerate" — parent should resend the last user prompt */
   onRegenerate?: () => void;
   onUploadClick?: () => void;
+  onConfirmTool?: (confirmationId: string, action: 'confirm' | 'reject') => void;
   /** Real message count from the parent page's state (for accurate memory meter) */
   realMessageCount?: number;
 }
@@ -25,11 +26,12 @@ interface GeminiThreadProps {
 /** Context to pass callbacks down to ChatMessage without prop drilling */
 const ThreadActionsContext = createContext<{
   onRegenerate?: () => void;
+  onConfirmTool?: (confirmationId: string, action: 'confirm' | 'reject') => void;
   realMessageCount: number;
 }>({ realMessageCount: 0 });
 
-export const GeminiThread = ({ emptyTitle, onRegenerate, onUploadClick, realMessageCount = 0 }: GeminiThreadProps) => (
-  <ThreadActionsContext.Provider value={{ onRegenerate, realMessageCount }}>
+export const GeminiThread = ({ emptyTitle, onRegenerate, onUploadClick, onConfirmTool, realMessageCount = 0 }: GeminiThreadProps) => (
+  <ThreadActionsContext.Provider value={{ onRegenerate, onConfirmTool, realMessageCount }}>
     <ThreadPrimitive.Root className="h-full bg-[#fdfcfc] dark:bg-[#131314] flex flex-col overflow-hidden w-full relative">
       <AuiIf condition={(s) => s.thread.isEmpty}>
         <EmptyState emptyTitle={emptyTitle} onUploadClick={onUploadClick} />
@@ -224,6 +226,7 @@ const ArtifactList = ({ artifacts }: { artifacts: any[] }) => {
 }
 
 const CustomToolCall = (part: any) => {
+  const { onConfirmTool } = useContext(ThreadActionsContext);
   const toolName = part.toolName || part.part?.toolName;
   const args = part.args || part.part?.args;
   
@@ -240,18 +243,57 @@ const CustomToolCall = (part: any) => {
           思考流程信息 · {traceEvents.length} 个步骤
         </summary>
         <div className="mt-3 max-h-[300px] overflow-y-auto space-y-3 opacity-90 pr-2 scrollbar-thin">
-          {traceEvents.map((event: any, idx: number) => (
-            <div key={idx} className="border-l-2 border-primary/25 pl-3">
-              <div className="font-medium text-text-primary">
-                {idx + 1}. {traceLabels[event?.type] || event?.type || '事件'}
-              </div>
-              {event?.content && (
-                <div className="mt-1.5 whitespace-pre-wrap text-text-secondary">
-                  {event.content}
+          {traceEvents.map((event: any, idx: number) => {
+            const confirmationId = typeof event?.metadata?.confirmation_id === 'string'
+              ? event.metadata.confirmation_id
+              : '';
+            const confirmationStatus = typeof event?.metadata?.confirmation_status === 'string'
+              ? event.metadata.confirmation_status
+              : '';
+            const confirmationResolved = ['confirmed', 'rejected', 'already_resolved'].includes(confirmationStatus);
+            const confirmationBusy = ['confirming', 'rejecting'].includes(confirmationStatus);
+            return (
+              <div key={idx} className="border-l-2 border-primary/25 pl-3">
+                <div className="font-medium text-text-primary">
+                  {idx + 1}. {traceLabels[event?.type] || event?.type || '事件'}
                 </div>
-              )}
-            </div>
-          ))}
+                {event?.content && (
+                  <div className="mt-1.5 whitespace-pre-wrap text-text-secondary">
+                    {event.content}
+                  </div>
+                )}
+                {event?.type === 'approval_required' && event?.metadata?.confirmation_id && confirmationId && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      title="确认执行工具"
+                      aria-label="确认执行工具"
+                      disabled={!onConfirmTool || confirmationResolved || confirmationBusy}
+                      onClick={() => onConfirmTool?.(confirmationId, 'confirm')}
+                      className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[#0b57d0] px-2.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#0842a0] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Check className="size-3.5" aria-hidden="true" />
+                      <span>确认</span>
+                    </button>
+                    <button
+                      type="button"
+                      title="拒绝执行工具"
+                      aria-label="拒绝执行工具"
+                      disabled={!onConfirmTool || confirmationResolved || confirmationBusy}
+                      onClick={() => onConfirmTool?.(confirmationId, 'reject')}
+                      className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[12px] font-medium text-text-primary transition-colors hover:border-red-500/60 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <X className="size-3.5" aria-hidden="true" />
+                      <span>拒绝</span>
+                    </button>
+                    {confirmationStatus && (
+                      <span className="text-[12px] text-text-secondary">{confirmationStatus}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </details>
     );

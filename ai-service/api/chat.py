@@ -15,7 +15,7 @@ from api.models import (
     PendingConfirmationsResponse,
 )
 from api.confirmation_store import get_store
-from agent.agent import AIAgent, AVAILABLE_TOOLS
+from agent.agent import AIAgent, AVAILABLE_TOOLS, tool_registry
 from memory.base import ChatMemory
 from memory.factory import chat_memory_status, get_chat_memory
 from config import settings
@@ -226,7 +226,13 @@ async def chat_confirm(req: ConfirmRequest):
 
     if action == "confirm":
         store.confirm(req.confirmation_id)
-        return ConfirmResponse(status="confirmed", confirmation_id=req.confirmation_id)
+        tool_result = await tool_registry.execute_tool(rec.tool_name, rec.args)
+        return ConfirmResponse(
+            status="confirmed",
+            confirmation_id=req.confirmation_id,
+            tool_name=rec.tool_name,
+            tool_result=tool_result,
+        )
     else:
         store.reject(req.confirmation_id)
         return ConfirmResponse(status="rejected", confirmation_id=req.confirmation_id)

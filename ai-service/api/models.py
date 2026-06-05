@@ -139,6 +139,8 @@ class ConfirmResponse(BaseModel):
 
     status: str  # "confirmed" | "rejected" | "not_found" | "already_resolved"
     confirmation_id: str
+    tool_name: Optional[str] = None
+    tool_result: Optional[dict] = None
 
 
 class PendingConfirmationItem(BaseModel):

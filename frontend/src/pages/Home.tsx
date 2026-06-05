@@ -58,7 +58,7 @@ function Home() {
         {/* Module Cards */}
         <div className="grid grid-cols-2 gap-8 w-full max-w-[800px] max-md:grid-cols-1">
           <Link
-            to="/love-master"
+            to="/hiking-rag"
             className="group flex flex-col bg-white/10 backdrop-blur-xl rounded-[24px] p-8 border border-white/20 transition-[transform,background-color,border-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:-translate-y-1 hover:bg-white/20 hover:border-white/40 hover:shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] cursor-pointer"
             style={{ animation: 'fadeUp 260ms var(--ease-out) 50ms both' }}
           >

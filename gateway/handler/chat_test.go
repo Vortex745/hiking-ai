@@ -179,6 +179,78 @@ func TestChatHistoryProxiesToAIService(t *testing.T) {
 	}
 }
 
+func TestChatConfirmProxiesToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/api/v1/chat/confirm"
+		if r.URL.Path != expectedPath {
+			t.Errorf("expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode proxied body: %v", err)
+		}
+		if body["confirmation_id"] != "confirm-1" || body["action"] != "confirm" {
+			t.Errorf("unexpected proxied body: %v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"confirmed","confirmation_id":"confirm-1"}`))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewChatHandler(aiService.URL)
+	router.POST("/api/v1/chat/confirm", handler.ChatConfirm)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/confirm",
+		strings.NewReader(`{"confirmation_id":"confirm-1","action":"confirm"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "confirmed") {
+		t.Errorf("expected response body to contain confirmed, got: %s", rec.Body.String())
+	}
+}
+
+func TestChatPendingProxiesToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/api/v1/chat/pending/chat-123"
+		if r.URL.Path != expectedPath {
+			t.Errorf("expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"chat_id":"chat-123","pending":[]}`))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewChatHandler(aiService.URL)
+	router.GET("/api/v1/chat/pending/:chatId", handler.ChatPending)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/chat/pending/chat-123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "chat-123") {
+		t.Errorf("expected response body to contain chat id, got: %s", rec.Body.String())
+	}
+}
+
 func TestArtifactDownloadProxiesToAIService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

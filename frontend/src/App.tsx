@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import {
   Mountain,
   Home,
@@ -7,7 +7,7 @@ import {
   Settings,
 } from 'lucide-react'
 import HomePage from './pages/Home'
-import LoveMaster from './pages/HikingRAG'
+import HikingRAG from './pages/HikingRAG'
 import SuperAgent from './pages/SuperAgent'
 import LlmConfig from './pages/LlmConfig'
 
@@ -44,7 +44,7 @@ function App() {
             <Home className="w-5 h-5" strokeWidth={2} />
           </NavLink>
           <NavLink
-            to="/love-master"
+            to="/hiking-rag"
             className={({ isActive }) =>
               `flex items-center justify-center w-10 h-10 rounded-full transition-[background-color,color,box-shadow] duration-150 ease-[var(--ease-out)] ${
                 isActive ? 'bg-white/20 text-white shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'
@@ -75,8 +75,8 @@ function App() {
         <main className="flex-1 overflow-y-auto flex flex-col relative w-full h-full">
           <Routes>
             <Route path="/" element={<HomePage />} />
-            <Route path="/love-master" element={<LoveMaster />} />
-            <Route path="/hiking-rag" element={<LoveMaster />} />
+            <Route path="/love-master" element={<Navigate to="/hiking-rag" replace />} />
+            <Route path="/hiking-rag" element={<HikingRAG />} />
             <Route path="/super-agent" element={<SuperAgent />} />
             <Route path="/llm-config" element={<LlmConfig />} />
           </Routes>

@@ -59,7 +59,6 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
         force3D: true,
         overwrite: 'auto',
         onComplete: () => {
-          gsap.set(container, { clearProps: 'transform,opacity,visibility,willChange' });
           setMounted(false);
         },
       });
@@ -76,11 +75,11 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
         style={{ opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? 'auto' : 'none' }}
         onClick={onClose}
       />
-      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-[#202124]/95 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left">
-      <div className="p-3 border-b border-white/10 flex items-center justify-between">
+      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-[#202124]/95 hover:bg-[#202124] transition-colors duration-150 ease-[var(--ease-out)] backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left p-2">
+      <div className="p-2 mb-1 flex items-center justify-between">
         <button
           onClick={onNewSession}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-white text-[#202124] rounded-xl text-sm font-medium transition-colors duration-150 ease-[var(--ease-out)] hover:bg-white/90 shadow-sm press-scale"
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white text-[#202124] rounded-xl text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-[var(--ease-out)] hover:bg-white/90 shadow-sm press-scale mr-2"
         >
           <MessageSquare className="w-4 h-4" />
           新建对话
@@ -94,7 +93,7 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
           <X className="w-5 h-5" aria-hidden="true" />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto px-1 pb-1 scrollbar-thin">
         {sessions.length === 0 && (
           <div className="text-sm text-white/50 text-center py-6 px-2">暂无历史对话</div>
         )}
@@ -102,10 +101,10 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
           <div
             key={session.id}
             onClick={() => onLoadSession(session)}
-            className={`session-item group flex items-center gap-2 px-3 py-3 rounded-xl cursor-pointer transition-colors duration-150 ease-[var(--ease-out)] mb-1 ${
+            className={`session-item group flex items-center gap-2 px-3 py-3 rounded-xl cursor-pointer transition-[background-color,color,box-shadow] duration-150 ease-[var(--ease-out)] mb-1 ${
               activeSessionId === session.id
-                ? 'bg-white/20 text-white'
-                : 'hover:bg-white/10 text-white hover:text-white'
+                ? 'bg-white/20 text-white shadow-sm'
+                : 'text-white/70 hover:bg-white/10 hover:text-white'
             }`}
           >
             <MessageSquare className="w-4 h-4 shrink-0 opacity-50" />

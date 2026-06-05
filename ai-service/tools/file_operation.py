@@ -7,8 +7,11 @@ WORKSPACE_DIR = runtime_dir("WORKSPACE_DIR", "workspace")
 
 def _resolve_path(path: str) -> Path:
     """Resolve and validate file path within workspace."""
-    full_path = (WORKSPACE_DIR / path).resolve()
-    if not str(full_path).startswith(str(WORKSPACE_DIR.resolve())):
+    workspace = WORKSPACE_DIR.resolve()
+    full_path = (workspace / path).resolve()
+    try:
+        full_path.relative_to(workspace)
+    except ValueError:
         raise ValueError("文件路径超出工作目录范围")
     return full_path
 

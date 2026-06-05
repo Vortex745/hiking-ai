@@ -5,16 +5,19 @@ import { test } from 'node:test'
 const source = readFileSync(new URL('../src/pages/SuperAgent.tsx', import.meta.url), 'utf8')
 const ragSource = readFileSync(new URL('../src/pages/HikingRAG.tsx', import.meta.url), 'utf8')
 const geminiThreadSource = readFileSync(new URL('../src/components/assistant-ui/gemini/GeminiThread.tsx', import.meta.url), 'utf8')
+const apiConfigSource = readFileSync(new URL('../src/api/config.ts', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const homeSource = readFileSync(new URL('../src/pages/Home.tsx', import.meta.url), 'utf8')
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 const floatingSidebarSource = readFileSync(new URL('../src/components/FloatingSidebar.tsx', import.meta.url), 'utf8')
 const publicDir = new URL('../public/', import.meta.url)
 
-test('homepage RAG entry and legacy RAG route both render the RAG module', () => {
-  assert.match(homeSource, /to="\/love-master"/)
-  assert.doesNotMatch(homeSource, /to="\/hiking-rag"/)
-  assert.match(appSource, /<Route path="\/hiking-rag" element=\{<LoveMaster \/>\} \/>/)
+test('RAG public entry uses hiking-rag as the canonical route', () => {
+  assert.match(homeSource, /to="\/hiking-rag"/)
+  assert.doesNotMatch(homeSource, /to="\/love-master"/)
+  assert.match(appSource, /to="\/hiking-rag"/)
+  assert.match(appSource, /<Route path="\/hiking-rag" element=\{<HikingRAG \/>\} \/>/)
+  assert.match(appSource, /<Route path="\/love-master" element=\{<Navigate to="\/hiking-rag" replace \/>\} \/>/)
 })
 
 test('public pages include a search result description', () => {
@@ -71,6 +74,29 @@ test('agent requests include saved runtime LLM settings', () => {
   assert.match(source, /const modelSettings = buildRuntimeModelSettings\(\)/)
   assert.match(source, /payload\.model_settings = modelSettings/)
   assert.match(source, /body: JSON\.stringify\(payload\)/)
+})
+
+test('agent high-risk tool confirmation routes are configured', () => {
+  assert.match(apiConfigSource, /chatConfirm: `\$\{API_BASE\}\/chat\/confirm`/)
+  assert.match(apiConfigSource, /chatPending: \(chatId: string\) => `\$\{API_BASE\}\/chat\/pending\/\$\{encodeURIComponent\(chatId\)\}`/)
+})
+
+test('agent page posts confirm and reject actions for pending tools', () => {
+  assert.match(source, /const handleToolConfirmation = useCallback/)
+  assert.match(source, /fetch\(API\.chatConfirm/)
+  assert.match(source, /confirmation_id: confirmationId/)
+  assert.match(source, /action/)
+  assert.match(source, /appendConfirmedToolResult/)
+  assert.match(source, /onConfirmTool=\{handleToolConfirmation\}/)
+})
+
+test('agent trace panel renders high-risk confirmation controls', () => {
+  assert.match(geminiThreadSource, /onConfirmTool\?: \(confirmationId: string, action: 'confirm' \| 'reject'\) => void/)
+  assert.match(geminiThreadSource, /onConfirmTool/)
+  assert.match(geminiThreadSource, /event\?\.type === 'approval_required'/)
+  assert.match(geminiThreadSource, /event\?\.metadata\?\.confirmation_id/)
+  assert.match(geminiThreadSource, /title="确认执行工具"/)
+  assert.match(geminiThreadSource, /title="拒绝执行工具"/)
 })
 
 test('agent page hydrates persisted server history by stable chat id', () => {

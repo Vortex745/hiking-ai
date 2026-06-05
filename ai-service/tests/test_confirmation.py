@@ -2,6 +2,8 @@
 
 import time
 import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -134,6 +136,32 @@ class TestConfirmHttpEndpoint:
         assert data["status"] == "confirmed"
         assert data["confirmation_id"] == cid
         assert store.get(cid).status == "confirmed"
+
+    def test_confirm_executes_registered_tool_after_user_approval(self, client, monkeypatch):
+        from agent.agent import tool_registry
+
+        mock_ainvoke = AsyncMock(return_value="文件已写入: report.md")
+        monkeypatch.setitem(
+            tool_registry._instances,
+            "file_operation",
+            SimpleNamespace(ainvoke=mock_ainvoke),
+        )
+        store = get_store()
+        args = {"operation": "write", "path": "report.md", "content": "ok"}
+        cid = store.add("file_operation", args, chat_id="chat-1", step=2)
+
+        resp = client.post("/api/v1/chat/confirm", json={
+            "confirmation_id": cid,
+            "action": "confirm",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "confirmed"
+        assert data["tool_name"] == "file_operation"
+        assert data["tool_result"]["ok"] is True
+        assert data["tool_result"]["result"] == "文件已写入: report.md"
+        mock_ainvoke.assert_awaited_once_with(args)
 
     def test_reject_valid(self, client):
         store = get_store()
