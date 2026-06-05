@@ -50,9 +50,11 @@ test('floating conversation sidebar gives icon-only buttons accessible names', (
   assert.match(floatingSidebarSource, /title="删除对话"/)
 })
 
-test('floating conversation sidebar matches the active switch background', () => {
-  assert.match(appSource, /isActive \? 'bg-white\/20 text-white shadow-sm'/)
-  assert.match(floatingSidebarSource, /bg-white\/20/)
+test('floating conversation sidebar matches the top switch container background', () => {
+  assert.match(appSource, /bg-black\/40/)
+  assert.match(appSource, /hover:bg-black\/50/)
+  assert.match(floatingSidebarSource, /bg-black\/40/)
+  assert.match(floatingSidebarSource, /hover:bg-black\/50/)
   assert.match(floatingSidebarSource, /bg-white text-\[#202124\]/)
   assert.match(floatingSidebarSource, /text-white\/80 mt-0\.5/)
 })
