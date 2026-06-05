@@ -76,20 +76,22 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
         style={{ opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? 'auto' : 'none' }}
         onClick={onClose}
       />
-      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left">
+      <div ref={containerRef} className="absolute top-4 left-4 md:top-6 md:left-6 z-50 flex flex-col w-[260px] max-w-[calc(100vw-32px)] max-h-[calc(100vh-88px)] bg-[#202124]/95 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl overflow-hidden text-white origin-top-left">
       <div className="p-3 border-b border-white/10 flex items-center justify-between">
         <button
           onClick={onNewSession}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-white/20 text-white rounded-xl text-sm transition-colors duration-150 ease-[var(--ease-out)] hover:bg-white/30 shadow-sm press-scale"
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-white text-[#202124] rounded-xl text-sm font-medium transition-colors duration-150 ease-[var(--ease-out)] hover:bg-white/90 shadow-sm press-scale"
         >
           <MessageSquare className="w-4 h-4" />
           新建对话
         </button>
         <button 
           onClick={onClose}
+          aria-label="关闭历史对话"
+          title="关闭历史对话"
           className="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10 transition-colors press-scale"
         >
-          <X className="w-5 h-5" />
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
@@ -103,19 +105,21 @@ export const FloatingSidebar = ({ isOpen, onClose, sessions, activeSessionId, on
             className={`session-item group flex items-center gap-2 px-3 py-3 rounded-xl cursor-pointer transition-colors duration-150 ease-[var(--ease-out)] mb-1 ${
               activeSessionId === session.id
                 ? 'bg-white/20 text-white'
-                : 'hover:bg-white/10 text-white/80 hover:text-white'
+                : 'hover:bg-white/10 text-white hover:text-white'
             }`}
           >
             <MessageSquare className="w-4 h-4 shrink-0 opacity-50" />
             <div className="flex-1 min-w-0">
               <div className="text-sm truncate">{session.title}</div>
-              <div className="text-[11px] opacity-60 mt-0.5">{session.date}</div>
+              <div className="text-[11px] text-white/80 mt-0.5">{session.date}</div>
             </div>
             <button
               onClick={(e) => onDeleteSession(e, session.id)}
+              aria-label="删除对话"
+              title="删除对话"
               className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-[opacity,color,background-color] duration-150 ease-[var(--ease-out)] press-scale"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
         ))}

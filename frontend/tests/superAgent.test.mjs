@@ -1,10 +1,63 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 const source = readFileSync(new URL('../src/pages/SuperAgent.tsx', import.meta.url), 'utf8')
 const ragSource = readFileSync(new URL('../src/pages/HikingRAG.tsx', import.meta.url), 'utf8')
 const geminiThreadSource = readFileSync(new URL('../src/components/assistant-ui/gemini/GeminiThread.tsx', import.meta.url), 'utf8')
+const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const homeSource = readFileSync(new URL('../src/pages/Home.tsx', import.meta.url), 'utf8')
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
+const floatingSidebarSource = readFileSync(new URL('../src/components/FloatingSidebar.tsx', import.meta.url), 'utf8')
+const publicDir = new URL('../public/', import.meta.url)
+
+test('homepage RAG entry and legacy RAG route both render the RAG module', () => {
+  assert.match(homeSource, /to="\/love-master"/)
+  assert.doesNotMatch(homeSource, /to="\/hiking-rag"/)
+  assert.match(appSource, /<Route path="\/hiking-rag" element=\{<LoveMaster \/>\} \/>/)
+})
+
+test('public pages include a search result description', () => {
+  assert.match(indexHtml, /<meta name="description" content="[^"]*徒步[^"]*" \/>/)
+})
+
+test('public crawler guidance files are served as text assets', () => {
+  const robotsUrl = new URL('robots.txt', publicDir)
+  const llmsUrl = new URL('llms.txt', publicDir)
+  assert.equal(existsSync(robotsUrl), true)
+  assert.equal(existsSync(llmsUrl), true)
+  assert.match(readFileSync(robotsUrl, 'utf8'), /^User-agent: \*/m)
+  assert.match(readFileSync(llmsUrl, 'utf8'), /^# AI智能徒步助手/m)
+  assert.match(readFileSync(llmsUrl, 'utf8'), /\[首页\]\(https:\/\/530745\.xyz\/\)/)
+})
+
+test('shared chat composer exposes accessible input and icon button names', () => {
+  assert.match(geminiThreadSource, /aria-label="输入徒步问题"/)
+  assert.match(geminiThreadSource, /name="message"/)
+  assert.match(geminiThreadSource, /aria-label="发送消息"/)
+  assert.match(geminiThreadSource, /title="发送消息"/)
+  assert.match(geminiThreadSource, /aria-label="停止生成"/)
+  assert.match(geminiThreadSource, /title="停止生成"/)
+})
+
+test('floating conversation sidebar gives icon-only buttons accessible names', () => {
+  assert.match(floatingSidebarSource, /aria-label="关闭历史对话"/)
+  assert.match(floatingSidebarSource, /title="关闭历史对话"/)
+  assert.match(floatingSidebarSource, /aria-label="删除对话"/)
+  assert.match(floatingSidebarSource, /title="删除对话"/)
+})
+
+test('floating conversation sidebar keeps text readable over light chat content', () => {
+  assert.match(floatingSidebarSource, /bg-\[#202124\]\/95/)
+  assert.match(floatingSidebarSource, /bg-white text-\[#202124\]/)
+  assert.match(floatingSidebarSource, /text-white\/80 mt-0\.5/)
+})
+
+test('homepage hero content stays above the decorative video layer', () => {
+  assert.match(homeSource, /<video[\s\S]*aria-hidden="true"/)
+  assert.match(homeSource, /z-\[1\][^"]*pointer-events-none/)
+  assert.match(homeSource, /z-\[2\][^"]*isolate/)
+})
 
 test('quick actions send explicit Agent scenario', () => {
   assert.match(source, /scenario: 'route_plan'/)
@@ -38,6 +91,7 @@ test('RAG page hydrates persisted server history by stable chat id', () => {
 test('RAG page exposes a visible document upload action', () => {
   assert.match(ragSource, /ref=\{fileInputRef\}/)
   assert.match(ragSource, /type="file"/)
+  assert.match(ragSource, /name="file"/)
   assert.match(ragSource, /onChange=\{handleFileUpload\}/)
   assert.match(ragSource, /onUploadClick=\{\(\) => fileInputRef\.current\?\.click\(\)\}/)
   assert.match(geminiThreadSource, /onUploadClick\?: \(\) => void/)
@@ -84,8 +138,9 @@ test('artifact events render in artifact area', () => {
   assert.match(source, /msg\.artifacts && msg\.artifacts\.length > 0/)
   assert.match(geminiThreadSource, /Download/)
   assert.match(geminiThreadSource, /metadata\.download_url/)
-  assert.match(geminiThreadSource, /download=\{filename\}/)
-  assert.match(geminiThreadSource, /href=\{downloadUrl\}/)
+  assert.match(geminiThreadSource, /fetch\(url\)/)
+  assert.match(geminiThreadSource, /a\.download = filename/)
+  assert.match(geminiThreadSource, /URL\.createObjectURL\(blob\)/)
 })
 
 test('agent empty streaming state uses RAG thinking animation', () => {

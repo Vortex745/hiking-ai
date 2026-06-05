@@ -22,6 +22,7 @@ func NewRouter(cfg *config.Config) *gin.Engine {
 	chatHandler := handler.NewChatHandler(cfg.AIServiceURL)
 	modelsHandler := handler.NewModelsHandler(cfg.AIServiceURL)
 	ragHandler := handler.NewRAGHandler(cfg.AIServiceURL)
+	toolsHandler := handler.NewToolsHandler(cfg.AIServiceURL)
 
 	r.GET("/health", healthHandler.Health)
 
@@ -41,6 +42,8 @@ func NewRouter(cfg *config.Config) *gin.Engine {
 		api.GET("/rag/documents", ragHandler.RagDocuments)
 		api.GET("/rag/history/:chatId", ragHandler.RagHistory)
 		api.DELETE("/rag/history/:chatId", ragHandler.RagClearHistory)
+
+		api.GET("/tools/health", toolsHandler.ToolsHealth)
 	}
 
 	return r

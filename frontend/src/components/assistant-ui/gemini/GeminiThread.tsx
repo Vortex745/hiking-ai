@@ -79,20 +79,30 @@ const Composer = ({ onUploadClick }: { onUploadClick?: () => void }) => (
       )}
       <ComposerPrimitive.Input
         placeholder="输入您的问题..."
+        aria-label="输入徒步问题"
+        name="message"
         className="flex-1 resize-none bg-transparent text-[16px] outline-none border-none py-1.5 min-h-[32px] text-[#1f1f1f] dark:text-[#e3e3e3] placeholder:text-[#444746] dark:placeholder:text-[#c4c7c5]"
       />
       
       {/* Send: disabled grey when empty, blue when there is text */}
       <AuiIf condition={(s) => !s.thread.isRunning}>
-        <ComposerPrimitive.Send className="bg-[#d3e3fd] text-[#062e6f] disabled:bg-[#e8eaed] disabled:text-[#1f1f1f]/40 dark:disabled:bg-[#333537] dark:disabled:text-[#c4c7c5]/40 p-2 rounded-full transition-colors flex shrink-0 h-10 w-10 items-center justify-center press-scale">
-          <ArrowUp className="w-[18px] h-[18px]" strokeWidth={2.5} />
+        <ComposerPrimitive.Send
+          aria-label="发送消息"
+          title="发送消息"
+          className="bg-[#d3e3fd] text-[#062e6f] disabled:bg-[#e8eaed] disabled:text-[#1f1f1f]/40 dark:disabled:bg-[#333537] dark:disabled:text-[#c4c7c5]/40 p-2 rounded-full transition-colors flex shrink-0 h-10 w-10 items-center justify-center press-scale"
+        >
+          <ArrowUp className="w-[18px] h-[18px]" strokeWidth={2.5} aria-hidden="true" />
         </ComposerPrimitive.Send>
       </AuiIf>
       
       {/* Cancel: stop square while a response streams */}
       <AuiIf condition={(s) => s.thread.isRunning}>
-        <ComposerPrimitive.Cancel className="bg-[#d3e3fd] text-[#062e6f] p-2 rounded-full transition-colors flex shrink-0 h-10 w-10 items-center justify-center press-scale">
-          <span className="size-3 rounded-[3px] bg-current" />
+        <ComposerPrimitive.Cancel
+          aria-label="停止生成"
+          title="停止生成"
+          className="bg-[#d3e3fd] text-[#062e6f] p-2 rounded-full transition-colors flex shrink-0 h-10 w-10 items-center justify-center press-scale"
+        >
+          <span className="size-3 rounded-[3px] bg-current" aria-hidden="true" />
         </ComposerPrimitive.Cancel>
       </AuiIf>
     </div>

@@ -155,6 +155,7 @@ function HikingRAG() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const chatIdRef = useRef(getOrCreateChatId())
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Persist messages
   useEffect(() => {
@@ -430,6 +431,60 @@ function HikingRAG() {
     } catch { /* ignore */ }
   }
 
+  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || isSending) return
+
+    if (!activeSessionId) {
+      setActiveSessionId(generateId())
+    }
+
+    setIsSending(true)
+    setConnectionStatus('connected')
+
+    const uploadingMessage: Message = {
+      role: 'assistant',
+      content: `正在上传 ${file.name}...`,
+      isStreaming: true,
+    }
+    setMessages(prev => [...prev, uploadingMessage])
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('status', 'upload')
+      formData.append('model_settings', JSON.stringify(buildRuntimeModelSettings()))
+
+      const response = await fetch(API.ragUpload, {
+        method: 'POST',
+        body: formData,
+      })
+      const payload = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        const detail = payload?.detail || payload?.error || `${response.status} ${response.statusText}`
+        throw new Error(detail)
+      }
+
+      const chunks = typeof payload?.chunks === 'number' ? payload.chunks : 0
+      updateLastAssistant(last => ({
+        ...last,
+        content: `已上传 ${file.name}，切分 ${chunks} 个片段。现在可以围绕这份文档提问。`,
+        isStreaming: false,
+      }))
+    } catch (error) {
+      updateLastAssistant(last => ({
+        ...last,
+        content: `上传失败：${error instanceof Error ? error.message : '请稍后重试'}`,
+        isStreaming: false,
+      }))
+      setConnectionStatus('error')
+    } finally {
+      setIsSending(false)
+    }
+  }, [activeSessionId, isSending, updateLastAssistant])
+
   /** Regenerate: remove the last assistant response, re-send the last user prompt */
   const handleRegenerate = useCallback(() => {
     if (isSending) return
@@ -476,6 +531,14 @@ function HikingRAG() {
 
         {/* Main Gemini Thread Area */}
         <div className="flex-1 flex flex-col relative overflow-hidden bg-transparent">
+          <input
+            ref={fileInputRef}
+            type="file"
+            name="file"
+            className="hidden"
+            onChange={handleFileUpload}
+            aria-label="上传 RAG 文档"
+          />
           {/* Header Toggle Button */}
           {!sidebarOpen && (
             <button
@@ -489,6 +552,7 @@ function HikingRAG() {
           <GeminiThread
             emptyTitle="徒步知识问答，有什么我可以帮您？"
             onRegenerate={handleRegenerate}
+            onUploadClick={() => fileInputRef.current?.click()}
             realMessageCount={messages.length}
           />
         </div>

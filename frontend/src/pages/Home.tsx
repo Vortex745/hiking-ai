@@ -33,22 +33,23 @@ function Home() {
     <div ref={containerRef} className="relative flex flex-col items-center justify-center min-h-screen bg-gray-950 overflow-hidden pt-20">
       {/* Background Video */}
       <video
+        aria-hidden="true"
         autoPlay
         loop
         muted
         playsInline
         preload="auto"
         onPlaying={() => setVideoReady(true)}
-        className={`absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-700 ${
+        className={`absolute inset-0 w-full h-full object-cover z-[1] pointer-events-none transition-opacity duration-700 ${
           videoReady ? 'opacity-100' : 'opacity-0'
         }`}
         src="/ascii-art.mp4"
       />
       {/* Dark overlay for text contrast */}
-      <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none" />
+      <div className="absolute inset-0 bg-black/50 z-[1] pointer-events-none" />
 
       {/* Content */}
-      <div className="relative z-10 animate-[fadeIn_400ms_var(--ease-out)_both] px-6 max-w-[1000px] w-full flex flex-col items-center justify-center flex-1">
+      <div className="relative z-[2] isolate animate-[fadeIn_400ms_var(--ease-out)_both] px-6 max-w-[1000px] w-full flex flex-col items-center justify-center flex-1">
         {/* Hero */}
         <div className="text-center mb-16 h-[80px] flex items-center justify-center">
           <h1 ref={titleRef} className="text-5xl md:text-7xl font-['Noto_Sans_SC',sans-serif] font-black tracking-tight text-white drop-shadow-2xl">AI智能徒步助手</h1>
@@ -57,7 +58,7 @@ function Home() {
         {/* Module Cards */}
         <div className="grid grid-cols-2 gap-8 w-full max-w-[800px] max-md:grid-cols-1">
           <Link
-            to="/hiking-rag"
+            to="/love-master"
             className="group flex flex-col bg-white/10 backdrop-blur-xl rounded-[24px] p-8 border border-white/20 transition-[transform,background-color,border-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:-translate-y-1 hover:bg-white/20 hover:border-white/40 hover:shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] cursor-pointer"
             style={{ animation: 'fadeUp 260ms var(--ease-out) 50ms both' }}
           >

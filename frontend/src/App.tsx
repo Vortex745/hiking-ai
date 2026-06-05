@@ -15,7 +15,7 @@ function App() {
   const location = useLocation()
 
   const getHeaderTitle = () => {
-    if (location.pathname === '/love-master') return 'RAG 模块'
+    if (location.pathname === '/love-master' || location.pathname === '/hiking-rag') return 'RAG 模块'
     if (location.pathname === '/super-agent') return 'Agent 模块'
     if (location.pathname === '/llm-config') return 'LLM 配置'
     return '智能徒步助手'
@@ -76,6 +76,7 @@ function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/love-master" element={<LoveMaster />} />
+            <Route path="/hiking-rag" element={<LoveMaster />} />
             <Route path="/super-agent" element={<SuperAgent />} />
             <Route path="/llm-config" element={<LlmConfig />} />
           </Routes>
