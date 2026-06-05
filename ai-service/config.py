@@ -44,7 +44,6 @@ class Settings:
     memory_enabled: bool = True
     amap_api_key: str = ""
     mcp_servers: dict = {}
-    mcp_capability_map: dict = {}
     disabled_lanes: str = ""  # Comma-separated lane names to disable, e.g. "SIMPLE_TOOL,WORKFLOW"
 
     def _default_runtime_dir(self, name: str) -> str:
@@ -116,7 +115,6 @@ class Settings:
         self.memory_enabled = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
         self.amap_api_key = os.getenv("AMAP_API_KEY", "")
         self.mcp_servers = self._json_env("MCP_SERVERS")
-        self.mcp_capability_map = self._json_env("MCP_CAPABILITY_MAP")
         self.tavily_api_key = os.getenv("TAVILY_API_KEY", "")
         self.disabled_lanes = os.getenv("DISABLED_LANES", "")
 

@@ -53,7 +53,13 @@ class ToolCollection:
         return self.tool_map.get(name)
 
     def to_langchain_tools(self) -> list[Any]:
-        return list(self.tools)
+        result: list[Any] = []
+        for tool in self.tools:
+            if hasattr(tool, "to_langchain_tool"):
+                result.append(tool.to_langchain_tool())
+            else:
+                result.append(tool)
+        return result
 
     def to_params(self) -> list[dict[str, Any]]:
         params: list[dict[str, Any]] = []

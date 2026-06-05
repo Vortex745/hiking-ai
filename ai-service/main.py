@@ -100,4 +100,6 @@ except ImportError as e:
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Uvicorn's Windows reload subprocess policy uses SelectorEventLoop, which
+    # cannot start stdio MCP subprocesses.
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=(sys.platform != "win32"))

@@ -1,11 +1,9 @@
 from tools.file_operation import file_operation
 from tools.hiking_domain import (
     gear_checklist,
-    geo_lookup,
     risk_assessment,
     route_research,
     trip_report_export,
-    weather_lookup,
 )
 from tools.hiking_knowledge import hiking_knowledge_search
 from tools.pdf_generation import generate_pdf
@@ -18,7 +16,6 @@ from tools.web_search import web_search
 __all__ = [
     "file_operation",
     "gear_checklist",
-    "geo_lookup",
     "generate_pdf",
     "hiking_knowledge_search",
     "resource_download",
@@ -27,7 +24,6 @@ __all__ = [
     "terminal",
     "terminate",
     "trip_report_export",
-    "weather_lookup",
     "web_scraping",
     "web_search",
 ]

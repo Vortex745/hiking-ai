@@ -35,6 +35,24 @@ async def test_connect_stdio_success():
 
 
 @pytest.mark.asyncio
+async def test_connect_stdio_merges_config_env(monkeypatch):
+    """MCP server config env should be passed to the stdio subprocess."""
+    monkeypatch.setenv("PATH", "test-path")
+    mock_process = AsyncMock()
+    mock_process.stdin = AsyncMock()
+    mock_process.stdout = AsyncMock()
+    mock_process.stderr = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)) as create_proc:
+        c = MCPClient()
+        await c.connect_stdio("some-mcp-server", ["--stdio"], env={"AMAP_MAPS_API_KEY": "secret"})
+
+    kwargs = create_proc.call_args.kwargs
+    assert kwargs["env"]["AMAP_MAPS_API_KEY"] == "secret"
+    assert kwargs["env"]["PATH"] == "test-path"
+
+
+@pytest.mark.asyncio
 async def test_connect_stdio_failure():
     """测试 connect_stdio 在命令不存在时静默容错（logger warning + 不抛异常）"""
     c = MCPClient()
@@ -287,8 +305,8 @@ async def test_load_tools_from_config_namespaces_loaded_tools():
 async def test_mcp_runtime_keeps_client_and_calls_loaded_tool():
     calls = []
 
-    async def fake_connect(self, command, args=None):
-        calls.append(("connect", command, args))
+    async def fake_connect(self, command, args=None, env=None):
+        calls.append(("connect", command, args, env))
         self.process = MagicMock()
 
     async def fake_initialize(self):
@@ -308,13 +326,19 @@ async def test_mcp_runtime_keeps_client_and_calls_loaded_tool():
         patch.object(MCPClient, "initialize", new=fake_initialize), \
         patch.object(MCPClient, "list_tools", new=fake_list_tools), \
         patch.object(MCPClient, "call_tool", new=fake_call_tool):
-        runtime = MCPRuntime({"amap": {"command": "amap-mcp", "args": ["--stdio"]}})
+        runtime = MCPRuntime({
+            "amap": {
+                "command": "amap-mcp",
+                "args": ["--stdio"],
+                "env": {"AMAP_MAPS_API_KEY": "secret"},
+            }
+        })
         result = await runtime.call_tool("amap", "weather", {"city": "北京"})
 
     assert result == [{"type": "text", "text": "晴"}]
     assert runtime.health()["loaded"] is True
     assert calls == [
-        ("connect", "amap-mcp", ["--stdio"]),
+        ("connect", "amap-mcp", ["--stdio"], {"AMAP_MAPS_API_KEY": "secret"}),
         ("initialize",),
         ("list_tools",),
         ("call_tool", "weather", {"city": "北京"}),

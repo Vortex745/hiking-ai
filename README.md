@@ -90,7 +90,6 @@ EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSIONS=1536
 
 MCP_SERVERS={"amap":{"command":"amap-mcp","args":["--stdio"]}}
-MCP_CAPABILITY_MAP={"weather":{"server":"amap","tool":"weather"},"geocode":{"server":"amap","tool":"geocode"},"reverse_geocode":{"server":"amap","tool":"regeo"}}
 ```
 
 ### Docker Compose 启动
@@ -320,7 +319,6 @@ https://gateway-262534-6-1364947792.sh.run.tcloudbase.com/api/v1
 
 ```env
 MCP_SERVERS={"amap":{"command":"amap-mcp","args":["--stdio"]}}
-MCP_CAPABILITY_MAP={"weather":{"server":"amap","tool":"weather"},"geocode":{"server":"amap","tool":"geocode"},"reverse_geocode":{"server":"amap","tool":"regeo"}}
 ```
 
 ### Feishu 同步不可用

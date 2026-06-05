@@ -20,8 +20,7 @@ SYSTEM_PROMPT = """<Role>
 
 <Tools>
 - hiking_knowledge_search：查询户外知识库；用于稳定安全知识、装备原则、徒步经验。
-- geo_lookup：查询地理位置、城市、行政区、adcode；用于目的地或浏览器定位。
-- weather_lookup：查询目的地或当前位置天气；用于天气适宜性和风险判断。
+- mcp_*：外部 MCP 服务发现到的实时工具；优先用于天气、地理编码、逆地理编码等实时事实，具体可调用名称以 RuntimeContext.selected_tools 为准。
 - route_research：构造路线资料查询；用于路线规划或目的地研究。
 - gear_checklist：生成保守装备清单；用于装备检查。
 - risk_assessment：基于天气、路线、经验和天数给出保守风险判断。

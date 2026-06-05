@@ -28,8 +28,9 @@ class MCPRuntime:
                 self.errors[server_name] = "missing command"
                 continue
             args = config.get("args", []) or []
+            env = config.get("env") or None
             client = MCPClient()
-            await client.connect_stdio(command, args)
+            await client.connect_stdio(command, args, env=env)
             if client.process is None:
                 self.errors[server_name] = "connection failed"
                 continue

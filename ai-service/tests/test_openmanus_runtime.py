@@ -205,11 +205,116 @@ def test_hiking_manus_create_wraps_tools_in_collection():
     fake_llm = object()
     fake_tool = SimpleNamespace(name="weather_lookup", description="weather", ainvoke=AsyncMock())
 
-    manus = HikingManus.create(llm=fake_llm, tools=[fake_tool], max_steps=5)
+    manus = asyncio.run(HikingManus.create(llm=fake_llm, tools=[fake_tool], max_steps=5))
 
     assert manus.llm is fake_llm
     assert manus.max_steps == 5
     assert manus.available_tools.get_tool("weather_lookup") is fake_tool
+
+
+def test_hiking_manus_initializes_mcp_tools_before_think(monkeypatch):
+    calls = []
+
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            calls.append(("connect", command, args, env))
+
+        async def initialize(self):
+            calls.append(("initialize",))
+            return {}
+
+        async def list_tools(self):
+            calls.append(("list_tools",))
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            calls.append(("call_tool", tool_name, arguments))
+            return [{"type": "text", "text": "晴"}]
+
+        async def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+
+    manus = asyncio.run(HikingManus.create(
+        llm=object(),
+        tools=[],
+        mcp_server_configs={
+            "amap": {
+                "command": "cmd",
+                "args": ["/c", "amap"],
+                "env": {"AMAP_MAPS_API_KEY": "test"},
+            }
+        },
+    ))
+
+    try:
+        mcp_tool = manus.available_tools.get_tool("mcp_amap_maps_weather")
+        assert mcp_tool is not None
+        assert getattr(mcp_tool, "original_name") == "maps_weather"
+        assert calls[:3] == [
+            ("connect", "cmd", ["/c", "amap"], {"AMAP_MAPS_API_KEY": "test"}),
+            ("initialize",),
+            ("list_tools",),
+        ]
+    finally:
+        asyncio.run(manus.cleanup())
+
+
+def test_raw_mcp_tool_executes_through_original_server_tool(monkeypatch):
+    calls = []
+
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            calls.append(("connect", command, args, env))
+
+        async def initialize(self):
+            calls.append(("initialize",))
+            return {}
+
+        async def list_tools(self):
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            calls.append(("call_tool", tool_name, arguments))
+            return [{"type": "text", "text": "广州 晴"}]
+
+        async def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+
+    manus = asyncio.run(HikingManus.create(
+        llm=object(),
+        tools=[],
+        mcp_server_configs={"amap": {"command": "cmd", "args": ["/c", "amap"]}},
+    ))
+
+    try:
+        result = asyncio.run(manus.execute_tool("mcp_amap_maps_weather", {"city": "广州"}))
+    finally:
+        asyncio.run(manus.cleanup())
+
+    assert ("call_tool", "maps_weather", {"city": "广州"}) in calls
+    assert "广州 晴" in result
 
 
 def test_planning_tool_tracks_step_status():
@@ -244,12 +349,14 @@ def test_ai_agent_builds_hiking_manus_tool_collection(monkeypatch):
     monkeypatch.setattr("config.settings.memory_enabled", False)
 
     with patch("agent.agent.ChatOpenAI", return_value=object()):
+        from agent import agent as agent_module
         from agent.agent import AIAgent
         from agent.intake import understand_request
 
+        monkeypatch.setattr(agent_module.settings, "mcp_servers", {})
         agent = AIAgent()
         context = understand_request("随便聊聊")
-        manus = agent._build_hiking_manus(context)
+        manus = asyncio.run(agent._build_hiking_manus(context))
 
     assert manus.llm is agent.llm
     assert manus.available_tools.to_langchain_tools()

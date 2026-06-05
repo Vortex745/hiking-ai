@@ -43,9 +43,11 @@ def test_tools_api_can_include_hidden_domain_tools():
     assert response.status_code == 200
     data = response.json()
     names = _tool_names(data)
-    assert data["count"] == 14
+    assert data["count"] == 12
     assert "hiking_knowledge_search" in names
     assert "trip_report_export" in names
+    assert "weather_lookup" not in names
+    assert "geo_lookup" not in names
 
     hiking_tool = next(
         item for item in data["tools"] if item["function"]["name"] == "hiking_knowledge_search"
@@ -54,7 +56,8 @@ def test_tools_api_can_include_hidden_domain_tools():
     assert hiking_tool["function"]["hidden"] is True
 
 
-def test_tools_health_reports_registry_and_mcp_readiness():
+def test_tools_health_reports_registry_and_mcp_readiness(monkeypatch):
+    monkeypatch.setattr("api.tools.settings.mcp_servers", {})
     client = TestClient(app)
 
     response = client.get("/api/v1/tools/health")
@@ -62,12 +65,10 @@ def test_tools_health_reports_registry_and_mcp_readiness():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["tools_total"] == 14
+    assert data["tools_total"] == 12
     assert data["visible_tools"] == 7
-    assert data["hidden_tools"] == 7
+    assert data["hidden_tools"] == 5
     assert data["configuration"]["ok"] is True
     assert data["mcp"]["configured"] is False
-    assert data["mcp"]["capabilities"]["weather"]["configured"] is False
-    assert data["mcp"]["capabilities"]["geocode"]["configured"] is False
-    assert data["mcp"]["capabilities"]["reverse_geocode"]["configured"] is False
+    assert "capabilities" not in data["mcp"]
     assert "amap_api_key" not in data["external_keys"]

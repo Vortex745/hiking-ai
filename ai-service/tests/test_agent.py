@@ -20,6 +20,7 @@ class FakeToolModel:
     def __init__(self, responses):
         self.responses = list(responses)
         self.bound_tools = []
+        self.messages = []
 
     def bind_tools(self, tools, tool_choice="auto"):
         self.bound_tools = tools
@@ -27,6 +28,7 @@ class FakeToolModel:
         return self
 
     def invoke(self, messages):
+        self.messages = messages
         if self.responses:
             return self.responses.pop(0)
         return AIMessage(content="任务已完成。")
@@ -49,6 +51,7 @@ def _tool_call_response(tool_name: str, args: dict, call_id: str = "call-1"):
 
 def _run_with_tool(monkeypatch, tool_name: str, args: dict):
     monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {})
     fake_llm = FakeToolModel([
         _tool_call_response(tool_name, args),
         AIMessage(content="完成。"),
@@ -79,7 +82,9 @@ def test_get_tool_registry_has_expected_tools():
     names = {tool.name for tool in AIAgent.get_tool_registry().list_all_tools()}
 
     assert "web_search" in names
-    assert "weather_lookup" in names
+    assert "weather_lookup" not in names
+    assert "geo_lookup" not in names
+    assert "mcp_amap_maps_weather" not in names
     assert "terminate" in names
 
 
@@ -137,3 +142,105 @@ def test_unknown_tool_falls_back_to_medium_risk(monkeypatch):
 
     assert tool_call["metadata"]["risk_level"] == "medium"
     assert "Unknown tool" in tool_result["content"]
+
+
+def test_openmanus_start_exposes_raw_mcp_tools_without_intent_gate(monkeypatch):
+    calls = []
+
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            calls.append(("connect", command, args, env))
+
+        async def initialize(self):
+            calls.append(("initialize",))
+            return {}
+
+        async def list_tools(self):
+            calls.append(("list_tools",))
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            calls.append(("call_tool", tool_name, arguments))
+            return [{"type": "text", "text": "晴"}]
+
+        async def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {
+        "amap": {
+            "command": "cmd",
+            "args": ["/c", "amap"],
+            "env": {"AMAP_MAPS_API_KEY": "test"},
+        }
+    })
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+    fake_llm = FakeToolModel([AIMessage(content="直接回答。")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
+        from agent.agent import AIAgent
+
+        events = collect_async(AIAgent().aexecute_stream("明晚广州什么天气", scenario="weather"))
+
+    start = next(e for e in events if e.get("metadata", {}).get("phase") == "openmanus_start")
+    tools = start["metadata"]["tools"]
+
+    assert "mcp_amap_maps_weather" in tools
+    assert "weather_lookup" not in tools
+    assert "geo_lookup" not in tools
+    assert ("initialize",) in calls
+    assert ("close",) in calls
+
+
+def test_openmanus_prompt_does_not_reference_removed_weather_aliases(monkeypatch):
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            pass
+
+        async def initialize(self):
+            return {}
+
+        async def list_tools(self):
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            return [{"type": "text", "text": "晴"}]
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {
+        "amap": {"command": "cmd", "args": ["/c", "amap"]}
+    })
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+    fake_llm = FakeToolModel([AIMessage(content="直接回答。")])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
+        from agent.agent import AIAgent
+
+        collect_async(AIAgent().aexecute_stream("明晚广州什么天气", scenario="weather"))
+
+    system_prompt = getattr(fake_llm.messages[0], "content", "")
+
+    assert "mcp_amap_maps_weather" in system_prompt
+    assert "weather_lookup" not in system_prompt
+    assert "geo_lookup" not in system_prompt

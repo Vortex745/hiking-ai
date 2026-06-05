@@ -40,6 +40,7 @@ def _fake_tool(name: str, result: str = "ok"):
 
 def _run_openmanus(monkeypatch, responses, *, tool_name="web_search"):
     monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {})
     fake_llm = FakeToolModel(responses)
 
     with patch("agent.agent.ChatOpenAI", return_value=fake_llm):

@@ -34,8 +34,6 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "pdf_generation": RiskLevel.LOW,
     "generate_pdf": RiskLevel.LOW,
     "terminate": RiskLevel.HIGH,
-    "weather_lookup": RiskLevel.LOW,
-    "geo_lookup": RiskLevel.LOW,
     "route_research": RiskLevel.LOW,
     "hiking_knowledge_search": RiskLevel.LOW,
     "gear_checklist": RiskLevel.LOW,

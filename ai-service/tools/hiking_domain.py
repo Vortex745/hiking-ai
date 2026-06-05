@@ -10,7 +10,6 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from mcp.capabilities import resolve_hiking_capability
 from tools.pdf_generation import artifact_metadata, generate_pdf
 from tools.web_search import web_search
 from runtime_paths import runtime_dir
@@ -79,56 +78,6 @@ def _route_reason(name: str, search_text: str) -> str:
     if any(word in name for word in ("森林公园", "公园", "步道")):
         return "公园/步道型路线通常更适合城市近郊轻量徒步。"
     return "来自搜索摘要的候选路线，出发前仍需核验开放状态、里程和爬升。"
-
-
-@tool
-async def weather_lookup(
-    destination: str | None = None,
-    date: str | None = None,
-    adcode: str | None = None,
-    latitude: float | None = None,
-    longitude: float | None = None,
-) -> dict[str, Any]:
-    """查询徒步目的地的天气信息（通过高德天气 API）。
-
-    返回实时天气或未来 4 天预报，包括温度、风力、湿度等。
-    """
-    destination = (destination or "").strip()
-    adcode = (adcode or "").strip()
-
-    if not (destination or adcode or (latitude is not None and longitude is not None)):
-        return {"ok": False, "source": "mcp.weather", "message": "缺少目的地或定位坐标，无法查询天气。"}
-
-    return await resolve_hiking_capability("weather", {
-        "destination": destination,
-        "date": date,
-        "adcode": adcode,
-        "latitude": latitude,
-        "longitude": longitude,
-    })
-
-
-@tool
-async def geo_lookup(
-    destination: str | None = None,
-    latitude: float | None = None,
-    longitude: float | None = None,
-) -> dict[str, Any]:
-    """查询徒步目的地的地理位置信息（通过高德地理编码 API）。
-
-    返回坐标、行政区、城市等地理信息。
-    """
-    destination = (destination or "").strip()
-    has_coordinates = latitude is not None and longitude is not None
-    if not destination and not has_coordinates:
-        return {"ok": False, "source": "mcp.geocode", "message": "缺少目的地或定位坐标，无法查询地理位置。"}
-
-    capability = "reverse_geocode" if has_coordinates else "geocode"
-    return await resolve_hiking_capability(capability, {
-        "destination": destination,
-        "latitude": latitude,
-        "longitude": longitude,
-    })
 
 
 @tool

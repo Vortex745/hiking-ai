@@ -21,11 +21,9 @@ from rag.text_processing import clean_display_text, emphasize_display_terms
 from tools.file_operation import file_operation
 from tools.hiking_domain import (
     gear_checklist,
-    geo_lookup,
     risk_assessment,
     route_research,
     trip_report_export,
-    weather_lookup,
 )
 from tools.hiking_knowledge import hiking_knowledge_search
 from tools.pdf_generation import generate_pdf
@@ -69,8 +67,6 @@ OPENMANUS_TOOL_NAMES = [
     "resource_download",
     "terminal",
     "generate_pdf",
-    "weather_lookup",
-    "geo_lookup",
     "route_research",
     "hiking_knowledge_search",
     "gear_checklist",
@@ -87,8 +83,6 @@ AVAILABLE_TOOL_MAP = {
     "terminal": terminal,
     "generate_pdf": generate_pdf,
     "terminate": terminate,
-    "weather_lookup": weather_lookup,
-    "geo_lookup": geo_lookup,
     "route_research": route_research,
     "hiking_knowledge_search": hiking_knowledge_search,
     "gear_checklist": gear_checklist,
@@ -97,47 +91,6 @@ AVAILABLE_TOOL_MAP = {
 }
 
 AVAILABLE_TOOLS = [AVAILABLE_TOOL_MAP[name] for name in OPENMANUS_TOOL_NAMES]
-
-INTENT_TOOL_NAMES = {
-    AgentIntent.ROUTE_PLAN: [
-        "weather_lookup",
-        "geo_lookup",
-        "route_research",
-        "gear_checklist",
-        "risk_assessment",
-        "hiking_knowledge_search",
-        "terminate",
-    ],
-    AgentIntent.RISK_ASSESSMENT: [
-        "weather_lookup",
-        "geo_lookup",
-        "route_research",
-        "risk_assessment",
-        "gear_checklist",
-        "hiking_knowledge_search",
-        "terminate",
-    ],
-    AgentIntent.GEAR_CHECK: [
-        "weather_lookup",
-        "route_research",
-        "gear_checklist",
-        "risk_assessment",
-        "hiking_knowledge_search",
-        "terminate",
-    ],
-    AgentIntent.KNOWLEDGE_QA: ["hiking_knowledge_search", "terminate"],
-    AgentIntent.REPORT_EXPORT: [
-        "weather_lookup",
-        "route_research",
-        "gear_checklist",
-        "risk_assessment",
-        "trip_report_export",
-        "generate_pdf",
-        "terminate",
-    ],
-    AgentIntent.GENERAL_CHAT: ["web_search", "web_scraping", "terminate"],
-}
-
 
 def _unique_tool_names(names: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -166,7 +119,6 @@ def validate_tool_configuration() -> dict[str, Any]:
     add_issue("registered_not_available", registered_names - available_names)
     add_issue("available_missing_risk", available_names - risk_names)
     add_issue("openmanus_not_available", openmanus_names - available_names)
-    add_issue("available_not_openmanus", available_names - openmanus_names)
 
     return {
         "ok": not issues,
@@ -306,44 +258,6 @@ tool_registry.register_many([
         rate_limit_per_minute=60,
         domain="control",
         result_policy="compact",
-    ),
-    ToolMetadata(
-        name="weather_lookup",
-        description="Look up hiking weather envelope for a destination and date.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "destination": {"type": "string"},
-                "date": {"type": "string"},
-                "adcode": {"type": "string"},
-                "latitude": {"type": "number"},
-                "longitude": {"type": "number"},
-            },
-        },
-        risk_level=RiskLevel.LOW,
-        rate_limit_per_minute=20,
-        domain="hiking",
-        scenarios=("route_plan", "risk_assessment"),
-        result_policy="compact",
-        hidden=True,
-    ),
-    ToolMetadata(
-        name="geo_lookup",
-        description="Look up geolocation and terrain envelope for a hiking destination.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "destination": {"type": "string"},
-                "latitude": {"type": "number"},
-                "longitude": {"type": "number"},
-            },
-        },
-        risk_level=RiskLevel.LOW,
-        rate_limit_per_minute=20,
-        domain="hiking",
-        scenarios=("route_plan", "risk_assessment"),
-        result_policy="compact",
-        hidden=True,
     ),
     ToolMetadata(
         name="route_research",
@@ -670,10 +584,10 @@ class AIAgent:
             f"{prefetch_text}\n\n"
             "<ExecutionRules>\n"
             "- 缺少目的地、日期等关键条件时先追问，不要编造路线或天气。\n"
-            "- 当用户询问今天/当前位置/附近天气是否适合徒步，且当前定位存在时，不要追问城市；如未预取，先用 geo_lookup 反查定位，再用 weather_lookup 获取天气。\n"
-            "- 如当前定位只有 latitude/longitude，调用 geo_lookup 时直接传 latitude 和 longitude；weather_lookup 可使用 geo_lookup 返回的 adcode、city 或坐标。\n"
-            "- 如 PrefetchedEvidence 已包含 geo_lookup 和 weather_lookup，本轮不要再次调用它们；可直接回答或最多调用一次 risk_assessment。\n"
-            "- 户外安全建议优先引用已预取证据、hiking_knowledge_search、route_research、weather_lookup 等证据。\n"
+            "- 当用户询问今天/当前位置/附近天气是否适合徒步，且当前定位存在时，不要追问城市；如未预取，从 selected_tools 中选择最合适的 raw MCP 地理或天气工具。\n"
+            "- 如当前定位只有 latitude/longitude，调用 raw MCP 地理工具时直接传 latitude 和 longitude；天气工具可使用地理工具返回的 adcode、city 或坐标。\n"
+            "- 如 PrefetchedEvidence 已包含定位和天气结果，本轮不要重复查询；可直接回答或最多调用一次 risk_assessment。\n"
+            "- 户外安全建议优先引用已预取证据、raw MCP 天气结果、hiking_knowledge_search、route_research 等证据。\n"
             "- 最终回答使用自然中文，不要 Markdown 标题或编号格式；但对关键信息使用 **加粗** 标记（每段 2-5 处）。\n"
             "- 普通徒步场景不要要求终端、下载或任意文件操作。\n"
             "- 生成文档时先组织 Markdown，再按需生成 PDF，并说明路径和影响范围。\n"
@@ -718,10 +632,10 @@ class AIAgent:
             f"{prefetch_text}\n\n"
             "<ExecutionRules>\n"
             "- 缺少目的地、日期等关键条件时先追问，不要编造路线或天气。\n"
-            "- 当用户询问今天/当前位置/附近天气是否适合徒步，且当前定位存在时，不要追问城市；如未预取，先用 geo_lookup 反查定位，再用 weather_lookup 获取天气。\n"
-            "- 如当前定位只有 latitude/longitude，调用 geo_lookup 时直接传 latitude 和 longitude；weather_lookup 可使用 geo_lookup 返回的 adcode、city 或坐标。\n"
-            "- 如 PrefetchedEvidence 已包含 geo_lookup 和 weather_lookup，本轮不要再次调用它们；可直接回答或最多调用一次 risk_assessment。\n"
-            "- 户外安全建议优先引用已预取证据、hiking_knowledge_search、route_research、weather_lookup 等证据。\n"
+            "- 当用户询问今天/当前位置/附近天气是否适合徒步，且当前定位存在时，不要追问城市；如未预取，从 selected_tools 中选择最合适的 raw MCP 地理或天气工具。\n"
+            "- 如当前定位只有 latitude/longitude，调用 raw MCP 地理工具时直接传 latitude 和 longitude；天气工具可使用地理工具返回的 adcode、city 或坐标。\n"
+            "- 如 PrefetchedEvidence 已包含定位和天气结果，本轮不要重复查询；可直接回答或最多调用一次 risk_assessment。\n"
+            "- 户外安全建议优先引用已预取证据、raw MCP 天气结果、hiking_knowledge_search、route_research 等证据。\n"
             "- 最终回答使用自然中文，不要 Markdown 标题或编号格式；但对关键信息使用 **加粗** 标记（每段 2-5 处）。\n"
             "- 普通徒步场景不要要求终端、下载或任意文件操作。\n"
             "- 生成文档时先组织 Markdown，再按需生成 PDF，并说明路径和影响范围。\n"
@@ -762,20 +676,19 @@ class AIAgent:
             return any(marker in content for marker in ROUTE_FOLLOWUP_MARKERS)
         return False
 
-    def _build_hiking_manus(self, context: AgentRequestContext) -> HikingManus:
-        selected_tools = self._openmanus_tools(context)
-        system_prompt = self._build_system_prompt(context, selected_tools)
-        return HikingManus.create(
+    async def _build_hiking_manus(self, context: AgentRequestContext) -> HikingManus:
+        selected_tools = self._openmanus_tools()
+        runtime = await HikingManus.create(
             llm=self.llm,
             tools=apply_tool_confirmation_guards(selected_tools),
-            system_prompt=system_prompt,
             max_steps=self.max_steps,
+            mcp_server_configs=getattr(settings, "mcp_servers", {}) or {},
         )
+        runtime.system_prompt = self._build_system_prompt(context, runtime.available_tools.to_langchain_tools())
+        return runtime
 
     def _openmanus_tool_names(self, context: AgentRequestContext | None = None) -> list[str]:
-        if context is None:
-            return _unique_tool_names(OPENMANUS_TOOL_NAMES)
-        return _unique_tool_names(INTENT_TOOL_NAMES.get(context.intent, OPENMANUS_TOOL_NAMES))
+        return _unique_tool_names(OPENMANUS_TOOL_NAMES)
 
     def _openmanus_tools(self, context: AgentRequestContext | None = None) -> list:
         return [AVAILABLE_TOOL_MAP[name] for name in self._openmanus_tool_names(context)]
@@ -897,10 +810,13 @@ class AIAgent:
 
         effective_scenario = self._infer_followup_scenario(message, history, scenario)
         context = understand_request(message, scenario=effective_scenario, current_location=current_location)
-        run_record.selected_tools = self._openmanus_tool_names(context)
         await self._inject_memory_context(history, message)
 
-        runtime = self._build_hiking_manus(context)
+        runtime = await self._build_hiking_manus(context)
+        run_record.selected_tools = [
+            getattr(tool, "name", "unknown_tool")
+            for tool in runtime.available_tools.tools
+        ]
         self._load_openmanus_history(runtime, history)
         runtime.update_memory("user", message)
 
@@ -1076,6 +992,11 @@ class AIAgent:
                 "openmanus_error",
                 **self._merge_run_record_metadata({"runtime": "openmanus"}, run_record),
             )
+        finally:
+            try:
+                await runtime.cleanup()
+            except Exception:
+                logger.warning("HikingManus cleanup failed", exc_info=True)
 
     async def _inject_memory_context(self, history: list | None, message: str) -> None:
         if self.memory_manager and settings.memory_enabled:

@@ -19,21 +19,6 @@ def _external_keys_status() -> dict[str, bool]:
     }
 
 
-def _mcp_capabilities_status() -> dict[str, dict[str, bool | str]]:
-    capability_map = getattr(settings, "mcp_capability_map", {}) or {}
-    result: dict[str, dict[str, bool | str]] = {}
-    for capability in ("weather", "geocode", "reverse_geocode"):
-        target = capability_map.get(capability) or {}
-        server = target.get("server") if isinstance(target, dict) else ""
-        tool = target.get("tool") if isinstance(target, dict) else ""
-        result[capability] = {
-            "configured": bool(server and tool),
-            "server": server,
-            "tool": tool,
-        }
-    return result
-
-
 @tools_router.get("")
 async def list_tools(include_hidden: bool = False):
     registry = AIAgent.get_tool_registry()
@@ -62,7 +47,6 @@ async def tools_health():
             "configured": configured,
             "loaded": runtime_health["loaded"],
             "servers": runtime_health["servers"],
-            "capabilities": _mcp_capabilities_status(),
             "errors": runtime_health["errors"],
         },
         "external_keys": _external_keys_status(),

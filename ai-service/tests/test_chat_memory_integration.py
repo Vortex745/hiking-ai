@@ -21,6 +21,11 @@ from api.models import RuntimeLlmConfig
 from memory import MemoryManager, MemoryConfig
 
 
+@pytest.fixture(autouse=True)
+def _disable_mcp_servers(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_servers", {})
+
+
 class FakeToolModel:
     def __init__(self, responses):
         self.responses = list(responses)

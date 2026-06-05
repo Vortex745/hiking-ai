@@ -38,8 +38,11 @@ def _fake_tool(name: str, result: str):
     )
 
 
-def _run_agent(monkeypatch, responses, tools=None, message="你好"):
+def _run_agent(monkeypatch, responses, tools=None, message="你好", mcp_servers=None, mcp_client_cls=None):
     monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", mcp_servers or {})
+    if mcp_client_cls is not None:
+        monkeypatch.setattr("agent.mcp_tools.MCPClient", mcp_client_cls)
     fake_llm = FakeToolModel(responses)
 
     with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
@@ -67,17 +70,43 @@ def test_greeting_runs_openmanus_direct_text(monkeypatch):
 
 
 def test_weather_query_can_use_openmanus_tools(monkeypatch):
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            pass
+
+        async def initialize(self):
+            return {}
+
+        async def list_tools(self):
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            return [{"type": "text", "text": "北京晴，23°C，风力 3 级"}]
+
+        async def close(self):
+            pass
+
     events, _ = _run_agent(
         monkeypatch,
         [
-            AIMessage(content="", tool_calls=[{"name": "weather_lookup", "args": {"destination": "北京"}, "id": "call-1"}]),
+            AIMessage(content="", tool_calls=[{"name": "mcp_amap_maps_weather", "args": {"city": "北京"}, "id": "call-1"}]),
             AIMessage(content="北京晴，适合成熟短线徒步。"),
         ],
-        tools={"weather_lookup": "北京晴，23°C，风力 3 级"},
         message="北京今天适合徒步吗",
+        mcp_servers={"amap": {"command": "cmd", "args": ["/c", "amap"]}},
+        mcp_client_cls=FakeMCPClient,
     )
 
-    assert any(event["type"] == "tool_call" and event["metadata"]["tool"] == "weather_lookup" for event in events)
+    assert any(event["type"] == "tool_call" and event["metadata"]["tool"] == "mcp_amap_maps_weather" for event in events)
     assert any(event["type"] == "tool_result" for event in events)
     assert events[-1]["metadata"]["status"] == "completed"
 

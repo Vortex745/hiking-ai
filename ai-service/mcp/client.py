@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -21,10 +22,19 @@ class MCPClient:
         self.tools: dict[str, dict] = {}
         self.initialized = False
 
-    async def connect_stdio(self, command: str, args: list[str] | None = None):
+    async def connect_stdio(
+        self,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, Any] | None = None,
+    ):
         """Connect to an MCP server via stdio."""
         if args is None:
             args = []
+        process_env = None
+        if env:
+            process_env = os.environ.copy()
+            process_env.update({str(key): str(value) for key, value in env.items() if value is not None})
         try:
             self.process = await asyncio.create_subprocess_exec(
                 command,
@@ -32,6 +42,7 @@ class MCPClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=process_env,
             )
             logger.info(f"MCP client connected: {command} {' '.join(args)}")
         except FileNotFoundError:
@@ -197,9 +208,10 @@ async def load_mcp_tools(server_configs: dict | None) -> list:
             logger.warning("Skipping MCP server %s without command", server_name)
             continue
         args = config.get("args", []) or []
+        env = config.get("env") or None
         client = MCPClient()
         try:
-            await client.connect_stdio(command, args)
+            await client.connect_stdio(command, args, env=env)
             await client.list_tools()
             for tool in client.convert_to_langchain_tools():
                 tool.name = f"mcp:{server_name}:{tool.name}"

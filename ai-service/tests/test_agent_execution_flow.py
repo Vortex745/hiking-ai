@@ -48,6 +48,7 @@ def _fake_tool(name: str, result: str = "ok"):
 
 def _run(monkeypatch, responses, *, tools=None, message="帮我推荐北京周边徒步路线"):
     monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {})
     fake_llm = FakeToolModel(responses)
 
     with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
@@ -157,7 +158,7 @@ def test_agent_stream_emits_artifact_event_for_generated_pdf(monkeypatch):
     assert artifact["metadata"]["mime_type"] == "application/pdf"
 
 
-def test_complex_route_plan_binds_domain_tools_without_generic_search(monkeypatch):
+def test_complex_route_plan_uses_openmanus_local_tool_surface(monkeypatch):
     events, _, fake_llm = _run(
         monkeypatch,
         [AIMessage(content="已生成广州一日徒步计划。")],
@@ -167,9 +168,11 @@ def test_complex_route_plan_binds_domain_tools_without_generic_search(monkeypatc
     bound_names = {tool.name for tool in fake_llm.bound_tools}
 
     assert events[-1]["metadata"]["reason"] == "openmanus_completed"
-    assert {"weather_lookup", "route_research", "gear_checklist", "risk_assessment", "terminate"}.issubset(bound_names)
-    assert "web_search" not in bound_names
-    assert "web_scraping" not in bound_names
+    assert {"route_research", "gear_checklist", "risk_assessment", "terminate"}.issubset(bound_names)
+    assert "web_search" in bound_names
+    assert "web_scraping" in bound_names
+    assert "weather_lookup" not in bound_names
+    assert "geo_lookup" not in bound_names
 
 
 def test_agent_stream_stops_when_terminate_tool_returns(monkeypatch):
@@ -221,32 +224,32 @@ def test_agent_stream_repeat_call_guard_skips_duplicate_calls(monkeypatch):
     events, _, _ = _run(
         monkeypatch,
         [
-            AIMessage(content="", tool_calls=[{"name": "weather_lookup", "args": {"adcode": "110101"}, "id": "call-1"}]),
-            AIMessage(content="", tool_calls=[{"name": "weather_lookup", "args": {"adcode": "110101"}, "id": "call-2"}]),
+            AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "北京天气"}, "id": "call-1"}]),
+            AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "北京天气"}, "id": "call-2"}]),
         ],
-        tools={"weather_lookup": "晴，23°C"},
+        tools={"web_search": "晴，23°C"},
         message="查询天气",
     )
 
-    weather_calls = [
+    repeated_calls = [
         event
         for event in events
-        if event["type"] == "tool_call" and event["metadata"]["tool"] == "weather_lookup"
+        if event["type"] == "tool_call" and event["metadata"]["tool"] == "web_search"
     ]
 
-    assert len(weather_calls) == 1
+    assert len(repeated_calls) == 1
     assert events[-1]["metadata"]["status"] == "stuck"
 
 
 def test_agent_stream_gracefully_handles_step_budget(monkeypatch):
     responses = [
         AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": f"路线 {idx}"}, "id": f"call-{idx}"}])
-        for idx in range(10)
+        for idx in range(25)
     ]
     events, _, _ = _run(
         monkeypatch,
         responses,
-        tools={"web_search": [f"找到路线 {idx}" for idx in range(10)]},
+        tools={"web_search": [f"找到路线 {idx}" for idx in range(25)]},
         message="帮我搜索一些户外资料",
     )
 
@@ -260,6 +263,7 @@ def test_agent_stream_gracefully_handles_step_budget(monkeypatch):
 
 def test_agent_sync_execute_uses_openmanus_path(monkeypatch):
     monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {})
     fake_llm = FakeToolModel([AIMessage(content="同步 OpenManus 回复")])
 
     with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
