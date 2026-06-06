@@ -8,6 +8,13 @@ from config import settings
 from mcp.client import MCPClient
 
 
+def _client_connected(client: MCPClient) -> bool:
+    connected = getattr(client, "connected", None)
+    if connected is not None:
+        return bool(connected)
+    return getattr(client, "process", None) is not None or bool(getattr(client, "http_url", None))
+
+
 class MCPRuntime:
     """Lazy MCP server runtime with persistent clients."""
 
@@ -23,15 +30,20 @@ class MCPRuntime:
             return
         self.started = True
         for server_name, config in (self.server_configs or {}).items():
+            url = config.get("url") if isinstance(config, dict) else None
             command = config.get("command") if isinstance(config, dict) else None
-            if not command:
-                self.errors[server_name] = "missing command"
+            if not (url or command):
+                self.errors[server_name] = "missing command or url"
                 continue
             args = config.get("args", []) or []
             env = config.get("env") or None
+            headers = config.get("headers") or None
             client = MCPClient()
-            await client.connect_stdio(command, args, env=env)
-            if client.process is None:
+            if url:
+                await client.connect_http(url, headers=headers)
+            else:
+                await client.connect_stdio(command, args, env=env)
+            if not _client_connected(client):
                 self.errors[server_name] = "connection failed"
                 continue
             try:

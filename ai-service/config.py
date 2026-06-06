@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -58,6 +59,17 @@ class Settings:
                 return value, name
         return "", ""
 
+    _env_ref_pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+    def _expand_env_refs(self, value):
+        if isinstance(value, str):
+            return self._env_ref_pattern.sub(lambda match: os.getenv(match.group(1), ""), value)
+        if isinstance(value, list):
+            return [self._expand_env_refs(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._expand_env_refs(item) for key, item in value.items()}
+        return value
+
     def _json_env(self, name: str) -> dict:
         value = os.getenv(name, "").strip()
         if not value:
@@ -66,7 +78,7 @@ class Settings:
             parsed = json.loads(value)
         except json.JSONDecodeError:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
+        return self._expand_env_refs(parsed) if isinstance(parsed, dict) else {}
 
     def load(self) -> "Settings":
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")

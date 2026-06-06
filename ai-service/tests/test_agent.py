@@ -101,6 +101,14 @@ def test_openmanus_tool_call_metadata_has_risk_fields(monkeypatch):
     assert meta["needs_confirmation"] is False
 
 
+def test_openmanus_done_metadata_counts_executed_tools(monkeypatch):
+    events = _run_with_tool(monkeypatch, "web_search", {"query": "test"})
+
+    done = next(e for e in events if e["type"] == "done")
+
+    assert done["metadata"]["tool_count"] == 1
+
+
 def test_openmanus_medium_risk_tool_metadata(monkeypatch):
     events = _run_with_tool(monkeypatch, "web_scraping", {"url": "http://example.com"})
 

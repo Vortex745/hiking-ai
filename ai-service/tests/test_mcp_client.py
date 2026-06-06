@@ -63,6 +63,108 @@ async def test_connect_stdio_failure():
         assert c.process is None
 
 
+@pytest.mark.asyncio
+async def test_connect_http_uses_streamable_http_and_session_header():
+    """HTTP MCP transport should initialize, keep the returned session id, and list tools."""
+    calls = []
+    responses = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}},
+        },
+        {},
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [
+                    {"name": "maps_weather", "description": "AMap weather", "inputSchema": {}}
+                ]
+            },
+        },
+    ]
+
+    class FakeResponse:
+        def __init__(self, payload, *, headers=None):
+            self._payload = payload
+            self.headers = headers or {"content-type": "application/json"}
+            self.text = json.dumps(payload)
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, json=None, headers=None):
+            calls.append({"url": url, "json": json, "headers": headers})
+            payload = responses.pop(0)
+            headers = {"content-type": "application/json"}
+            if json and json.get("method") == "initialize":
+                headers["Mcp-Session-Id"] = "session-123"
+            return FakeResponse(payload, headers=headers)
+
+    with patch("mcp.client.httpx.AsyncClient", FakeAsyncClient):
+        c = MCPClient()
+        await c.connect_http("https://mcp.amap.com/mcp?key=secret")
+        init_result = await c.initialize()
+        tools = await c.list_tools()
+
+    assert c.process is None
+    assert init_result["protocolVersion"] == "2025-06-18"
+    assert tools[0]["name"] == "maps_weather"
+    assert calls[0]["headers"]["Accept"] == "application/json, text/event-stream"
+    assert "Mcp-Session-Id" not in calls[0]["headers"]
+    assert calls[1]["headers"]["Mcp-Session-Id"] == "session-123"
+    assert calls[2]["headers"]["Mcp-Session-Id"] == "session-123"
+
+
+@pytest.mark.asyncio
+async def test_send_request_parses_streamable_http_sse_response():
+    """Some HTTP MCP servers respond with SSE frames instead of plain JSON."""
+
+    class FakeResponse:
+        headers = {"content-type": "text/event-stream"}
+        text = (
+            "event: message\n"
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"maps_weather\"}]}}\n\n"
+        )
+
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    with patch("mcp.client.httpx.AsyncClient", FakeAsyncClient):
+        c = MCPClient()
+        await c.connect_http("https://mcp.example/mcp")
+        response = await c._send_request("tools/list")
+
+    assert response["result"]["tools"][0]["name"] == "maps_weather"
+
+
 # ── _send_request ──────────────────────────────────────────────────
 
 
@@ -283,6 +385,7 @@ async def test_load_tools_from_config_namespaces_loaded_tools():
     mock_tool.name = "image_search"
 
     with patch.object(MCPClient, "connect_stdio", new=AsyncMock()), \
+        patch.object(MCPClient, "initialize", new=AsyncMock(return_value={})), \
         patch.object(MCPClient, "list_tools", new=AsyncMock(return_value=[{
             "name": "image_search",
             "description": "Search images",
@@ -299,6 +402,34 @@ async def test_load_tools_from_config_namespaces_loaded_tools():
 
     assert len(tools) == 1
     assert tools[0].name == "mcp:image:image_search"
+
+
+@pytest.mark.asyncio
+async def test_load_tools_from_config_supports_http_url():
+    """HTTP MCP configs should load and namespace tools the same as stdio configs."""
+    from mcp.client import load_mcp_tools
+
+    mock_tool = MagicMock()
+    mock_tool.name = "maps_weather"
+
+    with patch.object(MCPClient, "connect_http", new=AsyncMock()) as connect_http, \
+        patch.object(MCPClient, "initialize", new=AsyncMock(return_value={})), \
+        patch.object(MCPClient, "list_tools", new=AsyncMock(return_value=[{
+            "name": "maps_weather",
+            "description": "AMap weather",
+            "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }])), \
+        patch.object(MCPClient, "convert_to_langchain_tools", return_value=[mock_tool]), \
+        patch.object(MCPClient, "close", new=AsyncMock()):
+        tools = await load_mcp_tools({
+            "amap": {
+                "url": "https://mcp.amap.com/mcp?key=secret",
+            }
+        })
+
+    assert len(tools) == 1
+    assert tools[0].name == "mcp:amap:maps_weather"
+    connect_http.assert_awaited_once_with("https://mcp.amap.com/mcp?key=secret", headers=None)
 
 
 @pytest.mark.asyncio
@@ -342,6 +473,48 @@ async def test_mcp_runtime_keeps_client_and_calls_loaded_tool():
         ("initialize",),
         ("list_tools",),
         ("call_tool", "weather", {"city": "北京"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_supports_http_url_configs():
+    calls = []
+
+    async def fake_connect_http(self, url, headers=None):
+        calls.append(("connect_http", url, headers))
+        self.http_url = url
+
+    async def fake_initialize(self):
+        calls.append(("initialize",))
+        self.initialized = True
+        return {}
+
+    async def fake_list_tools(self):
+        calls.append(("list_tools",))
+        return [{"name": "maps_weather", "description": "Weather", "inputSchema": {}}]
+
+    async def fake_call_tool(self, tool_name, arguments=None):
+        calls.append(("call_tool", tool_name, arguments))
+        return [{"type": "text", "text": "晴"}]
+
+    with patch.object(MCPClient, "connect_http", new=fake_connect_http), \
+        patch.object(MCPClient, "initialize", new=fake_initialize), \
+        patch.object(MCPClient, "list_tools", new=fake_list_tools), \
+        patch.object(MCPClient, "call_tool", new=fake_call_tool):
+        runtime = MCPRuntime({
+            "amap": {
+                "url": "https://mcp.amap.com/mcp?key=secret",
+            }
+        })
+        result = await runtime.call_tool("amap", "maps_weather", {"city": "北京"})
+
+    assert result == [{"type": "text", "text": "晴"}]
+    assert runtime.health()["loaded"] is True
+    assert calls == [
+        ("connect_http", "https://mcp.amap.com/mcp?key=secret", None),
+        ("initialize",),
+        ("list_tools",),
+        ("call_tool", "maps_weather", {"city": "北京"}),
     ]
 
 

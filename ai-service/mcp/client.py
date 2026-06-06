@@ -4,7 +4,9 @@ import json
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
@@ -19,8 +21,15 @@ class MCPClient:
 
     def __init__(self):
         self.process: asyncio.subprocess.Process | None = None
+        self.http_url: str | None = None
+        self.http_headers: dict[str, str] = {}
+        self.http_session_id: str | None = None
         self.tools: dict[str, dict] = {}
         self.initialized = False
+
+    @property
+    def connected(self) -> bool:
+        return self.process is not None or bool(self.http_url)
 
     async def connect_stdio(
         self,
@@ -50,8 +59,81 @@ class MCPClient:
         except Exception as e:
             logger.error(f"MCP connection failed: {e}")
 
+    async def connect_http(self, url: str, headers: dict[str, Any] | None = None):
+        """Connect to an MCP server via Streamable HTTP transport."""
+        normalized_url = (url or "").strip()
+        if not normalized_url:
+            raise ValueError("MCP HTTP URL is required.")
+        self.http_url = normalized_url
+        self.http_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if value is not None
+        }
+        self.http_session_id = None
+        logger.info("MCP client connected via HTTP: %s", _safe_http_label(normalized_url))
+
+    def _http_request_headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2025-06-18",
+            **self.http_headers,
+        }
+        if self.http_session_id:
+            headers["Mcp-Session-Id"] = self.http_session_id
+        return headers
+
+    def _parse_sse_response(self, text: str) -> dict:
+        for event in text.split("\n\n"):
+            data_lines = [
+                line.removeprefix("data:").strip()
+                for line in event.splitlines()
+                if line.startswith("data:")
+            ]
+            if not data_lines:
+                continue
+            payload = "\n".join(data_lines).strip()
+            if not payload:
+                continue
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict):
+                return parsed
+        raise ValueError("MCP HTTP response did not contain a JSON-RPC SSE data frame")
+
+    def _parse_http_response(self, response: httpx.Response) -> dict:
+        response.raise_for_status()
+        session_id = response.headers.get("Mcp-Session-Id")
+        if session_id:
+            self.http_session_id = session_id
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/event-stream" in content_type:
+            return self._parse_sse_response(response.text)
+        if not response.text.strip():
+            return {}
+        return response.json()
+
+    async def _send_http_request(self, payload: dict) -> dict:
+        if not self.http_url:
+            raise ConnectionError("MCP HTTP server not connected")
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            response = await client.post(
+                self.http_url,
+                json=payload,
+                headers=self._http_request_headers(),
+            )
+        return self._parse_http_response(response)
+
     async def _send_request(self, method: str, params: dict | None = None) -> dict:
         """Send a JSON-RPC request to the MCP server."""
+        if self.http_url:
+            return await self._send_http_request({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": params or {},
+            })
         if not self.process or not self.process.stdin:
             raise ConnectionError("MCP server not connected")
 
@@ -73,6 +155,15 @@ class MCPClient:
 
     async def _send_notification(self, method: str, params: dict | None = None) -> None:
         """Send a JSON-RPC notification to the MCP server."""
+        if self.http_url:
+            notification = {
+                "jsonrpc": "2.0",
+                "method": method,
+            }
+            if params is not None:
+                notification["params"] = params
+            await self._send_http_request(notification)
+            return
         if not self.process or not self.process.stdin:
             raise ConnectionError("MCP server not connected")
 
@@ -190,6 +281,9 @@ class MCPClient:
                 await terminate_result
             await self.process.wait()
             self.process = None
+        self.http_url = None
+        self.http_headers = {}
+        self.http_session_id = None
 
 
 async def load_mcp_tools(server_configs: dict | None) -> list:
@@ -203,15 +297,21 @@ async def load_mcp_tools(server_configs: dict | None) -> list:
 
     loaded = []
     for server_name, config in server_configs.items():
+        url = config.get("url") if isinstance(config, dict) else None
         command = config.get("command") if isinstance(config, dict) else None
-        if not command:
-            logger.warning("Skipping MCP server %s without command", server_name)
+        if not (url or command):
+            logger.warning("Skipping MCP server %s without command or url", server_name)
             continue
         args = config.get("args", []) or []
         env = config.get("env") or None
+        headers = config.get("headers") or None
         client = MCPClient()
         try:
-            await client.connect_stdio(command, args, env=env)
+            if url:
+                await client.connect_http(url, headers=headers)
+            else:
+                await client.connect_stdio(command, args, env=env)
+            await client.initialize()
             await client.list_tools()
             for tool in client.convert_to_langchain_tools():
                 tool.name = f"mcp:{server_name}:{tool.name}"
@@ -219,3 +319,9 @@ async def load_mcp_tools(server_configs: dict | None) -> list:
         finally:
             await client.close()
     return loaded
+
+
+def _safe_http_label(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path or "/"
+    return f"{parts.scheme}://{parts.netloc}{path}"

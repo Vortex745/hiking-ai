@@ -270,6 +270,61 @@ def test_hiking_manus_initializes_mcp_tools_before_think(monkeypatch):
         asyncio.run(manus.cleanup())
 
 
+def test_hiking_manus_initializes_http_mcp_tools(monkeypatch):
+    calls = []
+
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = None
+            self.http_url = None
+            self.tools = {}
+
+        @property
+        def connected(self):
+            return bool(self.http_url)
+
+        async def connect_http(self, url, headers=None):
+            calls.append(("connect_http", url, headers))
+            self.http_url = url
+
+        async def initialize(self):
+            calls.append(("initialize",))
+            return {}
+
+        async def list_tools(self):
+            calls.append(("list_tools",))
+            self.tools["maps_weather"] = {
+                "name": "maps_weather",
+                "description": "Query AMap weather",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            calls.append(("call_tool", tool_name, arguments))
+            return [{"type": "text", "text": "晴"}]
+
+        async def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+
+    manus = asyncio.run(HikingManus.create(
+        llm=object(),
+        tools=[],
+        mcp_server_configs={
+            "amap": {"url": "https://mcp.amap.com/mcp?key=secret"},
+        },
+    ))
+    try:
+        mcp_tool = manus.available_tools.get_tool("mcp_amap_maps_weather")
+        assert mcp_tool is not None
+        assert getattr(mcp_tool, "original_name") == "maps_weather"
+        assert ("connect_http", "https://mcp.amap.com/mcp?key=secret", None) in calls
+    finally:
+        asyncio.run(manus.cleanup())
+
+
 def test_raw_mcp_tool_executes_through_original_server_tool(monkeypatch):
     calls = []
 

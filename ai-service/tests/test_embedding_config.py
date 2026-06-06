@@ -84,6 +84,26 @@ def test_settings_loads_mcp_server_config(monkeypatch):
     assert not hasattr(settings, "mcp_capability_map")
 
 
+def test_settings_expands_mcp_server_env_references(monkeypatch):
+    monkeypatch.setenv("AMAP_MAPS_API_KEY", "amap-secret")
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels-secret")
+    monkeypatch.setenv("MCP_SERVERS", json.dumps({
+        "amap": {
+            "url": "https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}",
+        },
+        "pexels": {
+            "command": "python",
+            "args": ["mcp_servers/pexels_server.py"],
+            "env": {"PEXELS_API_KEY": "${PEXELS_API_KEY}"},
+        },
+    }))
+
+    settings = Settings().load()
+
+    assert settings.mcp_servers["amap"]["url"] == "https://mcp.amap.com/mcp?key=amap-secret"
+    assert settings.mcp_servers["pexels"]["env"]["PEXELS_API_KEY"] == "pexels-secret"
+
+
 def test_rag_retriever_uses_embedding_config(monkeypatch):
     """RAG retriever should build embeddings from embedding-specific settings."""
 

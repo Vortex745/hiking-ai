@@ -46,9 +46,17 @@ class HikingManus(ToolCallAgent):
         for server_id, server_config in (server_configs or {}).items():
             if not isinstance(server_config, dict):
                 continue
+            url = server_config.get("url")
+            if url:
+                await self.connect_mcp_http_server(
+                    url,
+                    server_id=server_id,
+                    headers=server_config.get("headers") or None,
+                )
+                continue
             command = server_config.get("command")
             if not command:
-                self.mcp_clients.errors[server_id] = "missing command"
+                self.mcp_clients.errors[server_id] = "missing command or url"
                 continue
             await self.connect_mcp_server(
                 command,
@@ -70,6 +78,25 @@ class HikingManus(ToolCallAgent):
         if sid not in self.mcp_clients.clients:
             return
         self.connected_servers[sid] = command
+        new_tools = [
+            tool
+            for tool in self.mcp_clients.tools
+            if isinstance(tool, MCPClientTool) and tool.server_id == sid
+        ]
+        self.available_tools.add_tools(*new_tools)
+
+    async def connect_mcp_http_server(
+        self,
+        url: str,
+        *,
+        server_id: str = "",
+        headers: dict[str, Any] | None = None,
+    ) -> None:
+        await self.mcp_clients.connect_http(url, server_id=server_id, headers=headers)
+        sid = server_id or url
+        if sid not in self.mcp_clients.clients:
+            return
+        self.connected_servers[sid] = url
         new_tools = [
             tool
             for tool in self.mcp_clients.tools

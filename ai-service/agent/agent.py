@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -965,7 +966,16 @@ class AIAgent:
                         )
                         return
 
+                    tool_started_at = time.monotonic()
                     result_text = await runtime.execute_tool(name, args)
+                    run_record.record_tool_result({
+                        "tool_name": name,
+                        "args": args,
+                        "result": result_text,
+                        "error": None if "Error:" not in str(result_text) else str(result_text),
+                        "duration_ms": (time.monotonic() - tool_started_at) * 1000,
+                        "step_index": step,
+                    })
                     for preview in _pexels_markdown_previews_from_tool_result(name, result_text):
                         if preview not in image_markdown_previews:
                             image_markdown_previews.append(preview)

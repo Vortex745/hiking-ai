@@ -14,6 +14,13 @@ from agent.tool_collection import ToolCollection
 from mcp.client import MCPClient
 
 
+def _client_connected(client: MCPClient) -> bool:
+    connected = getattr(client, "connected", None)
+    if connected is not None:
+        return bool(connected)
+    return getattr(client, "process", None) is not None or bool(getattr(client, "http_url", None))
+
+
 def sanitize_mcp_tool_name(name: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
     sanitized = re.sub(r"_+", "_", sanitized).strip("_")
@@ -118,7 +125,50 @@ class MCPClients(ToolCollection):
 
         client = MCPClient()
         await client.connect_stdio(command, args or [], env=env)
-        if client.process is None:
+        if not _client_connected(client):
+            self.errors[server_id] = "connection failed"
+            return
+
+        try:
+            await client.initialize()
+            tools = await client.list_tools()
+        except Exception as exc:
+            self.errors[server_id] = str(exc)
+            await client.close()
+            return
+
+        self.clients[server_id] = client
+        for tool in tools:
+            original_name = str(tool.get("name", "")).strip()
+            if not original_name:
+                continue
+            tool_name = sanitize_mcp_tool_name(f"mcp_{server_id}_{original_name}")
+            self.add_tool(MCPClientTool(
+                name=tool_name,
+                description=tool.get("description", "") or f"MCP tool {server_id}:{original_name}",
+                parameters=tool.get("inputSchema", {}) or {"type": "object", "properties": {}},
+                client=client,
+                server_id=server_id,
+                original_name=original_name,
+            ))
+
+    async def connect_http(
+        self,
+        url: str,
+        *,
+        server_id: str = "",
+        headers: dict[str, Any] | None = None,
+    ) -> None:
+        if not url:
+            raise ValueError("Server URL is required.")
+
+        server_id = server_id or url
+        if server_id in self.clients:
+            await self.disconnect(server_id)
+
+        client = MCPClient()
+        await client.connect_http(url, headers=headers)
+        if not _client_connected(client):
             self.errors[server_id] = "connection failed"
             return
 
