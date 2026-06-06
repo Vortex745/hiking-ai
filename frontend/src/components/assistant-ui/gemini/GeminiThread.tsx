@@ -125,21 +125,73 @@ const formatArtifactSize = (value: unknown) => {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-const MARKDOWN_BOLD_PATTERN = /(\*\*(?=\S)[\s\S]*?\S\*\*)/g;
+const MARKDOWN_PATTERN = /(!\[[^\]]*\]\([^)]+\)|\[[^\]]*\]\([^)]+\)|\*\*(?=\S)[\s\S]*?\S\*\*)/g;
+const IMAGE_URL_PATTERN = /\.(jpg|jpeg|png|gif|webp|avif|bmp)(\?.*)?$/i;
 
 const MarkdownText = (part: any) => {
   const raw = part.text || part.part?.text || '';
-  // Split on **bold** patterns and render <strong> for matched segments
-  const segments = raw.split(MARKDOWN_BOLD_PATTERN);
+  // Split on bold, images, and links patterns
+  const segments = raw.split(MARKDOWN_PATTERN);
   return (
     <div className="whitespace-pre-wrap leading-relaxed relative">
-      {segments.map((seg: string, i: number) =>
-        seg.startsWith('**') && seg.endsWith('**') ? (
-          <strong key={i} className="font-bold">{seg.slice(2, -2)}</strong>
-        ) : (
-          <span key={i}>{seg}</span>
-        )
-      )}
+      {segments.map((seg: string, i: number) => {
+        if (!seg) return null;
+        
+        const imgMatch = seg.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (imgMatch) {
+          return (
+            <img 
+              key={i} 
+              src={imgMatch[2]} 
+              alt={imgMatch[1]} 
+              className="block max-w-full rounded-xl my-2 max-h-[350px] object-cover shadow-sm border border-black/5 dark:border-white/5" 
+              loading="lazy"
+            />
+          );
+        }
+        
+        const linkMatch = seg.match(/^\[([^\]]*)\]\(([^)]+)\)$/);
+        if (linkMatch) {
+          const linkText = linkMatch[1];
+          const linkUrl = linkMatch[2];
+          // Auto-detect image URLs and render as thumbnails
+          if (IMAGE_URL_PATTERN.test(linkUrl)) {
+            return (
+              <a
+                key={i}
+                href={linkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block max-w-full rounded-xl my-2 overflow-hidden shadow-sm border border-black/5 dark:border-white/5 hover:opacity-90 transition-opacity"
+              >
+                <img
+                  src={linkUrl}
+                  alt={linkText}
+                  className="block max-w-full max-h-[350px] object-cover"
+                  loading="lazy"
+                />
+              </a>
+            );
+          }
+          return (
+            <a
+              key={i}
+              href={linkUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#0b57d0] hover:underline dark:text-[#a8c7fa]"
+            >
+              {linkText}
+            </a>
+          );
+        }
+
+        if (seg.startsWith('**') && seg.endsWith('**')) {
+          return <strong key={i} className="font-bold">{seg.slice(2, -2)}</strong>;
+        }
+        
+        return <span key={i}>{seg}</span>;
+      })}
     </div>
   );
 };

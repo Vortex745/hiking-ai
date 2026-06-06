@@ -77,12 +77,14 @@ def _pexels_get(path: str, params: dict[str, Any]) -> tuple[dict[str, Any], dict
 def _photo_summary(photo: dict[str, Any]) -> dict[str, Any]:
     src = photo.get("src") if isinstance(photo.get("src"), dict) else {}
     photographer = photo.get("photographer")
+    alt = photo.get("alt") or ""
+    medium_url = src.get("medium") or src.get("large") or src.get("original") or ""
     return {
         "id": photo.get("id"),
         "url": photo.get("url"),
         "photographer": photographer,
         "photographer_url": photo.get("photographer_url"),
-        "alt": photo.get("alt"),
+        "alt": alt,
         "avg_color": photo.get("avg_color"),
         "width": photo.get("width"),
         "height": photo.get("height"),
@@ -93,6 +95,7 @@ def _photo_summary(photo: dict[str, Any]) -> dict[str, Any]:
             "landscape": src.get("landscape"),
             "portrait": src.get("portrait"),
         },
+        "markdown_preview": f"![{alt}]({medium_url})" if medium_url else "",
         "attribution": f"Photo by {photographer} on Pexels" if photographer else "Photo on Pexels",
     }
 
@@ -190,11 +193,11 @@ def search_videos(arguments: dict[str, Any]) -> dict[str, Any]:
 TOOLS: dict[str, dict[str, Any]] = {
     "search_photos": {
         "name": "search_photos",
-        "description": "Search Pexels photos by topic and return asset URLs, photographer attribution, and source links.",
+        "description": "搜索 Pexels 徒步目的地或户外场景的照片。当用户请求图片、照片、风景照时调用此工具，用目的地名称或场景描述作为 query。返回结果包含 markdown_preview 字段（Markdown 图片语法），请在回答中直接使用。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query, e.g. hiking trail, mountain tent."},
+                "query": {"type": "string", "description": "搜索关键词，如目的地名称或户外场景，例如：白云山、梧桐山徒步、mountain hiking"},
                 "per_page": {"type": "integer", "description": "Number of results, capped at 10."},
                 "page": {"type": "integer", "description": "Page number, starting at 1."},
                 "orientation": {"type": "string", "description": "landscape, portrait, or square."},
@@ -275,7 +278,7 @@ def main() -> None:
             response = _error_response(None, f"Invalid JSON: {exc}", code=-32700)
         if response is None:
             continue
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+        sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
         sys.stdout.flush()
 
 

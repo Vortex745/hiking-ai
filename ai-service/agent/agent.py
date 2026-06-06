@@ -471,6 +471,45 @@ def _artifact_events_from_tool_result(tool_name: str, content: str, *, step: int
     return events
 
 
+def _pexels_markdown_previews_from_tool_result(tool_name: str, content: str, *, limit: int = 3) -> list[str]:
+    if "pexels" not in (tool_name or "").lower():
+        return []
+
+    payload = _parse_json_object(content)
+    if not payload:
+        return []
+
+    photos = payload.get("photos")
+    if not isinstance(photos, list):
+        return []
+
+    previews: list[str] = []
+    seen: set[str] = set()
+    for photo in photos:
+        if not isinstance(photo, dict):
+            continue
+        preview = photo.get("markdown_preview")
+        if not isinstance(preview, str):
+            continue
+        preview = preview.strip()
+        if not preview.startswith("![") or "](" not in preview or preview in seen:
+            continue
+        previews.append(preview)
+        seen.add(preview)
+        if len(previews) >= limit:
+            break
+    return previews
+
+
+def _append_markdown_previews(text: str, previews: list[str]) -> str:
+    if not previews:
+        return text
+    missing = [preview for preview in previews if preview and preview not in text]
+    if not missing:
+        return text
+    return f"{text.rstrip()}\n\n" + "\n".join(missing)
+
+
 class AIAgent:
     """HikingManus-style Agent with hiking-aware prompts and tools."""
 
@@ -832,6 +871,7 @@ class AIAgent:
         }
 
         assistant_parts: list[str] = []
+        image_markdown_previews: list[str] = []
         repeat_detector = RepeatCallDetector()
         stuck_detector = StuckDetector()
 
@@ -848,7 +888,10 @@ class AIAgent:
                 should_act = await runtime.think()
                 if not should_act or not runtime.tool_calls:
                     content = runtime._message_text(runtime.messages[-1]) if runtime.messages else ""
-                    final_text = self._clean_final_answer(content or "任务已完成。")
+                    final_text = _append_markdown_previews(
+                        self._clean_final_answer(content or "任务已完成。"),
+                        image_markdown_previews,
+                    )
                     assistant_parts.append(final_text)
                     stuck_detector.record_assistant_content(final_text)
                     run_record.complete(ExitReason.NATURAL_END, current_step=step)
@@ -923,6 +966,9 @@ class AIAgent:
                         return
 
                     result_text = await runtime.execute_tool(name, args)
+                    for preview in _pexels_markdown_previews_from_tool_result(name, result_text):
+                        if preview not in image_markdown_previews:
+                            image_markdown_previews.append(preview)
                     runtime.memory.add_message(ToolMessage(content=result_text, name=name, tool_call_id=call_id or name))
                     stuck_detector.record_observation(name, result_text)
                     if stuck_detector.is_stuck():

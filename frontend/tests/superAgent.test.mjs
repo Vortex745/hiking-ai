@@ -200,9 +200,9 @@ test('Agent and RAG stream text through the client-side typewriter queue', () =>
 })
 
 test('Agent and RAG messages render markdown emphasis as bold text', () => {
-  assert.match(geminiThreadSource, /const MARKDOWN_BOLD_PATTERN = \/\(\\\*\\\*\(\?=\\S\)\[\\s\\S\]\*\?\\S\\\*\\\*\)\/g/)
-  assert.match(geminiThreadSource, /raw\.split\(MARKDOWN_BOLD_PATTERN\)/)
-  assert.match(geminiThreadSource, /<strong key=\{i\} className="font-bold">/)
+  assert.ok(geminiThreadSource.includes('const MARKDOWN_PATTERN'))
+  assert.ok(geminiThreadSource.includes('raw.split(MARKDOWN_PATTERN)'))
+  assert.ok(geminiThreadSource.includes('<strong key={i} className="font-bold">'))
 })
 
 test('legacy ChatRoom keeps a stable chat id for Redis-backed history', () => {
@@ -229,4 +229,25 @@ test('lifecycle panel can be pinned and dragged inside the page', () => {
   assert.match(geminiThreadSource, /handleLifecycleDragStart/)
   assert.match(geminiThreadSource, /window\.addEventListener\('pointermove'/)
   assert.match(geminiThreadSource, /clampLifecyclePosition/)
+})
+
+test('markdown renderer supports image syntax ![alt](url)', () => {
+  assert.ok(geminiThreadSource.includes('imgMatch = seg.match'))
+  assert.ok(geminiThreadSource.includes('<img '))
+  assert.ok(geminiThreadSource.includes('src={imgMatch[2]}'))
+})
+
+test('markdown renderer auto-detects image URLs in plain links and renders thumbnails', () => {
+  assert.ok(geminiThreadSource.includes('const IMAGE_URL_PATTERN'))
+  assert.ok(geminiThreadSource.includes('IMAGE_URL_PATTERN.test(linkUrl)'))
+  assert.ok(geminiThreadSource.includes('max-h-[350px]'))
+  assert.ok(geminiThreadSource.includes('loading="lazy"'))
+})
+
+test('pexels MCP server returns markdown-formatted image references in result text', () => {
+  const pexelsSource = readFileSync(new URL('../../ai-service/mcp_servers/pexels_server.py', import.meta.url), 'utf8')
+  assert.ok(pexelsSource.includes('_photo_summary'))
+  assert.ok(pexelsSource.includes('"markdown_preview"'))
+  assert.ok(pexelsSource.includes('!['))
+  assert.ok(pexelsSource.includes('pexels.com'))
 })

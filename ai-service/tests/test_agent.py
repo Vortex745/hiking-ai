@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -244,3 +245,87 @@ def test_openmanus_prompt_does_not_reference_removed_weather_aliases(monkeypatch
     assert "mcp_amap_maps_weather" in system_prompt
     assert "weather_lookup" not in system_prompt
     assert "geo_lookup" not in system_prompt
+
+
+def test_system_prompt_no_hardcoded_mcp_tool_names():
+    """Prompt rules must be generic — no specific MCP tool names in Constraints or DecisionPolicy."""
+    from agent.prompts import SYSTEM_PROMPT, NEXT_STEP_PROMPT
+
+    # Constraints and DecisionPolicy should NOT contain specific MCP tool names
+    for section in [SYSTEM_PROMPT, NEXT_STEP_PROMPT]:
+        assert "mcp_pexels" not in section, (
+            "Hardcoded MCP tool name found in prompt — use generic rules instead"
+        )
+
+
+def test_system_prompt_has_generic_tool_required_rule():
+    """Prompt must have a generic rule: when content requires a tool, call it, don't say 'cannot provide'."""
+    from agent.prompts import SYSTEM_PROMPT, NEXT_STEP_PROMPT
+
+    # Must contain a generic rule about content that requires tools
+    assert "不得" in SYSTEM_PROMPT and "无法提供" in SYSTEM_PROMPT, (
+        "Missing generic rule: must call tools for content types that require them"
+    )
+    assert "不得" in NEXT_STEP_PROMPT, (
+        "DecisionPolicy missing generic rule about tool-required content"
+    )
+
+
+def test_pexels_markdown_preview_is_appended_to_final_answer(monkeypatch):
+    class FakeMCPClient:
+        def __init__(self):
+            self.process = object()
+            self.tools = {}
+
+        async def connect_stdio(self, command, args=None, env=None):
+            pass
+
+        async def initialize(self):
+            return {}
+
+        async def list_tools(self):
+            self.tools["search_photos"] = {
+                "name": "search_photos",
+                "description": "Search Pexels photos",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }
+            return list(self.tools.values())
+
+        async def call_tool(self, tool_name, arguments=None):
+            return [{
+                "type": "text",
+                "text": json.dumps({
+                    "provider": "Pexels",
+                    "photos": [{
+                        "markdown_preview": "![Forbidden City](https://images.pexels.com/photos/1/medium.jpeg)",
+                        "url": "https://www.pexels.com/photo/1/",
+                    }],
+                }),
+            }]
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("agent.agent.settings.memory_enabled", False)
+    monkeypatch.setattr("agent.agent.settings.mcp_servers", {
+        "pexels": {"command": "python", "args": ["pexels_server.py"]},
+    })
+    monkeypatch.setattr("agent.mcp_tools.MCPClient", FakeMCPClient)
+    fake_llm = FakeToolModel([
+        _tool_call_response("mcp_pexels_search_photos", {"query": "故宫"}),
+        AIMessage(content="这里有一张故宫图片。"),
+    ])
+
+    with patch("agent.agent.ChatOpenAI", return_value=fake_llm):
+        from agent.agent import AIAgent
+
+        events = collect_async(AIAgent().aexecute_stream("给我一张故宫的图片"))
+
+    final_text = next(e for e in events if e["type"] == "text")["content"]
+
+    assert "这里有一张故宫图片" in final_text
+    assert "![Forbidden City](https://images.pexels.com/photos/1/medium.jpeg)" in final_text
