@@ -127,11 +127,25 @@ const formatArtifactSize = (value: unknown) => {
 
 const MARKDOWN_PATTERN = /(!\[[^\]]*\]\([^)]+\)|\[[^\]]*\]\([^)]+\)|\*\*(?=\S)[\s\S]*?\S\*\*)/g;
 const IMAGE_URL_PATTERN = /\.(jpg|jpeg|png|gif|webp|avif|bmp)(\?.*)?$/i;
+type PreviewImage = { src: string; alt: string };
 
 const MarkdownText = (part: any) => {
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const raw = part.text || part.part?.text || '';
   // Split on bold, images, and links patterns
   const segments = raw.split(MARKDOWN_PATTERN);
+
+  useEffect(() => {
+    if (!previewImage) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewImage(null);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImage]);
+
   return (
     <div className="whitespace-pre-wrap leading-relaxed relative">
       {segments.map((seg: string, i: number) => {
@@ -139,14 +153,24 @@ const MarkdownText = (part: any) => {
         
         const imgMatch = seg.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
         if (imgMatch) {
+          const alt = imgMatch[1] || '图片';
+          const src = imgMatch[2];
           return (
-            <img 
-              key={i} 
-              src={imgMatch[2]} 
-              alt={imgMatch[1]} 
-              className="block max-w-full rounded-xl my-2 max-h-[350px] object-cover shadow-sm border border-black/5 dark:border-white/5" 
-              loading="lazy"
-            />
+            <button
+              key={i}
+              type="button"
+              onClick={() => setPreviewImage({ src, alt })}
+              className="my-2 block max-w-full cursor-zoom-in overflow-hidden rounded-xl border border-black/5 shadow-sm transition-opacity hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[#0b57d0]/60 dark:border-white/5"
+              aria-label={`放大图片：${alt}`}
+              title="放大图片"
+            >
+              <img 
+                src={src} 
+                alt={alt} 
+                className="block max-w-full max-h-[350px] object-cover" 
+                loading="lazy"
+              />
+            </button>
           );
         }
         
@@ -157,20 +181,21 @@ const MarkdownText = (part: any) => {
           // Auto-detect image URLs and render as thumbnails
           if (IMAGE_URL_PATTERN.test(linkUrl)) {
             return (
-              <a
+              <button
                 key={i}
-                href={linkUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block max-w-full rounded-xl my-2 overflow-hidden shadow-sm border border-black/5 dark:border-white/5 hover:opacity-90 transition-opacity"
+                type="button"
+                onClick={() => setPreviewImage({ src: linkUrl, alt: linkText || '图片' })}
+                className="my-2 block max-w-full cursor-zoom-in overflow-hidden rounded-xl border border-black/5 shadow-sm transition-opacity hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[#0b57d0]/60 dark:border-white/5"
+                aria-label={`放大图片：${linkText || '图片'}`}
+                title="放大图片"
               >
                 <img
                   src={linkUrl}
-                  alt={linkText}
+                  alt={linkText || '图片'}
                   className="block max-w-full max-h-[350px] object-cover"
                   loading="lazy"
                 />
-              </a>
+              </button>
             );
           }
           return (
@@ -192,6 +217,34 @@ const MarkdownText = (part: any) => {
         
         return <span key={i}>{seg}</span>;
       })}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`图片预览：${previewImage.alt}`}
+          onClick={() => setPreviewImage(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              setPreviewImage(null);
+            }}
+            aria-label="关闭图片预览"
+            title="关闭图片预览"
+          >
+            <X className="size-5" aria-hidden="true" />
+          </button>
+          <img
+            src={previewImage.src}
+            alt={previewImage.alt}
+            className="max-h-[90vh] max-w-[92vw] rounded-xl object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 };

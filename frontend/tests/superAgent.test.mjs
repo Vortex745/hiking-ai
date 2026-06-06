@@ -234,7 +234,19 @@ test('lifecycle panel can be pinned and dragged inside the page', () => {
 test('markdown renderer supports image syntax ![alt](url)', () => {
   assert.ok(geminiThreadSource.includes('imgMatch = seg.match'))
   assert.ok(geminiThreadSource.includes('<img '))
-  assert.ok(geminiThreadSource.includes('src={imgMatch[2]}'))
+  assert.ok(geminiThreadSource.includes('const src = imgMatch[2]'))
+})
+
+test('markdown image thumbnails open an in-thread image preview', () => {
+  assert.ok(geminiThreadSource.includes('type PreviewImage = { src: string; alt: string }'))
+  assert.ok(geminiThreadSource.includes('const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)'))
+  assert.ok(geminiThreadSource.includes('setPreviewImage({ src, alt })'))
+  assert.ok(geminiThreadSource.includes("setPreviewImage({ src: linkUrl, alt: linkText || '图片' })"))
+  assert.ok(geminiThreadSource.includes("event.key === 'Escape'"))
+  assert.ok(geminiThreadSource.includes('role="dialog"'))
+  assert.ok(geminiThreadSource.includes('aria-label="关闭图片预览"'))
+  assert.ok(geminiThreadSource.includes('cursor-zoom-in'))
+  assert.ok(geminiThreadSource.includes('fixed inset-0 z-[100]'))
 })
 
 test('markdown renderer auto-detects image URLs in plain links and renders thumbnails', () => {
