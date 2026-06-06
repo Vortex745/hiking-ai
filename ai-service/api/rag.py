@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -44,6 +45,45 @@ DIRECT_ANSWER_PATTERNS = {
     "谢谢你",
 }
 
+FOLLOW_UP_MARKERS = {"这些", "这个", "这类", "它", "他们", "它们", "那", "上述", "上面", "刚才", "呢"}
+
+HIKING_INTENT_TERMS = {
+    "徒步",
+    "登山",
+    "爬山",
+    "户外",
+    "露营",
+    "营地",
+    "路线",
+    "轨迹",
+    "行程",
+    "装备",
+    "背包",
+    "登山鞋",
+    "冲锋衣",
+    "登山杖",
+    "头灯",
+    "补给",
+    "饮水",
+    "急救",
+    "导航",
+    "海拔",
+    "高反",
+    "失温",
+    "下撤",
+    "穿越",
+    "重装",
+    "轻装",
+    "雨天",
+    "山洪",
+}
+
+AMBIGUOUS_ACTIVITY_TERMS = {"活动", "带我", "参加", "报名"}
+
+RAG_UNCLEAR_MSG = "我没理解你的问题。可以换成一个具体的徒步问题，比如路线、装备、天气风险、营地选择或急救处理。"
+RAG_AMBIGUOUS_ACTIVITY_MSG = "你是想问徒步活动吗？请补充目的地、天数、难度或你想了解的具体问题，我再帮你查知识库。"
+RAG_OUT_OF_DOMAIN_MSG = "这个问题看起来不属于徒步知识库范围。你可以问徒步路线、装备、天气风险、营地选择、补给或急救相关问题。"
+
 
 def direct_rag_answer(question: str) -> str | None:
     normalized = question.strip().lower().rstrip("。！？!?")
@@ -54,6 +94,47 @@ def direct_rag_answer(question: str) -> str | None:
             return "不客气。需要查知识库内容时，直接把问题发给我就行。"
         return "你好，我是 AI Hiking 的 RAG 助手。你可以上传文档后向我提问，也可以先问一些简单问题。"
     return None
+
+
+def _compact_question_text(question: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", question).strip().lower()
+
+
+def _has_previous_user_message(history: list[dict]) -> bool:
+    return any(item.get("role") == "user" and str(item.get("content") or "").strip() for item in history)
+
+
+def _is_follow_up_question(question: str, history: list[dict]) -> bool:
+    return _has_previous_user_message(history) and any(marker in question for marker in FOLLOW_UP_MARKERS)
+
+
+def _has_hiking_intent(question: str) -> bool:
+    lowered = question.lower()
+    return any(term.lower() in lowered for term in HIKING_INTENT_TERMS)
+
+
+def _rag_guard_answer(question: str, history: list[dict]) -> str | None:
+    """Return a direct guard answer when a query should not enter retrieval."""
+    if find_feishu_links(question):
+        return None
+
+    compact = _compact_question_text(question)
+    if not compact:
+        return RAG_UNCLEAR_MSG
+
+    if _is_follow_up_question(question, history):
+        return None
+
+    if _has_hiking_intent(question):
+        return None
+
+    if len(compact) < 4:
+        return RAG_UNCLEAR_MSG
+
+    if any(term in compact for term in AMBIGUOUS_ACTIVITY_TERMS):
+        return RAG_AMBIGUOUS_ACTIVITY_MSG
+
+    return RAG_OUT_OF_DOMAIN_MSG
 
 
 def _runtime_llm_kwargs_from_settings(model_settings: RuntimeModelSettings | None) -> dict:
@@ -105,6 +186,29 @@ def _sse_event(event_type: str, content: str = "", metadata: dict | None = None)
     if metadata is not None:
         payload["metadata"] = metadata
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _recent_rag_history(memory, limit: int = 6) -> list[dict]:
+    if memory is None:
+        return []
+    try:
+        messages = memory.get_messages()
+    except Exception as e:
+        logger.warning("读取 RAG 历史失败，跳过上下文改写: %s", e)
+        return []
+
+    if not isinstance(messages, list):
+        return []
+
+    normalized: list[dict] = []
+    for item in messages[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if isinstance(role, str) and isinstance(content, str) and content.strip():
+            normalized.append({"role": role, "content": content})
+    return normalized
 
 
 def _preview_text(text: str, limit: int = 260) -> str:
@@ -343,11 +447,24 @@ async def rag_query(req: RAGQuery):
         memory = get_chat_memory(req.chat_id) if req.chat_id else None
         assistant_parts: list[str] = []
         try:
+            history_messages = _recent_rag_history(memory)
             _persist_rag_message(memory, "user", req.question)
             direct_answer = direct_rag_answer(req.question)
             if direct_answer is not None:
                 assistant_parts.append(direct_answer)
                 yield _sse_event("text", direct_answer)
+                _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
+                yield _sse_event("done")
+                return
+
+            guard_answer = _rag_guard_answer(req.question, history_messages)
+            if guard_answer is not None:
+                yield _sse_event(
+                    "process",
+                    "问题不清晰或超出徒步知识库范围，跳过知识库检索",
+                )
+                assistant_parts.append(guard_answer)
+                yield _sse_event("text", guard_answer)
                 _persist_rag_message(memory, "assistant", "".join(assistant_parts).strip())
                 yield _sse_event("done")
                 return
@@ -471,11 +588,25 @@ async def rag_query(req: RAGQuery):
             except Exception:
                 reranker = Reranker()
 
-            queries = rewriter.rewrite(req.question)
+            contextualize = getattr(rewriter, "contextualize", None)
+            contextual_question = (
+                contextualize(req.question, history_messages)
+                if callable(contextualize)
+                else req.question
+            )
+            if contextual_question != req.question:
+                yield _sse_event(
+                    "process",
+                    "结合历史上下文改写当前问题，用于检索",
+                    {"question": contextual_question},
+                )
+                await asyncio.sleep(0.2)
+
+            queries = rewriter.rewrite(contextual_question)
             yield _sse_event(
                 "process",
                 "调用查询改写模块生成检索查询：用户提问进入 query 改写",
-                {"query_count": len(queries)},
+                {"query_count": len(queries), "question": contextual_question},
             )
             await asyncio.sleep(0.2)
 
@@ -568,19 +699,19 @@ async def rag_query(req: RAGQuery):
             )
             await asyncio.sleep(0.2)
 
-            all_docs = cloud_docs + feishu_docs + all_docs
+            all_docs = feishu_docs + all_docs
             if reranker.enabled and all_docs:
                 yield _sse_event("process", "调用 Rerank 模型重排候选片段")
                 await asyncio.sleep(0.2)
-                all_docs = reranker.rerank(req.question, all_docs)
+                all_docs = reranker.rerank(contextual_question, all_docs)
                 yield _sse_event("process", f"Rerank 返回 {len(all_docs)} 个高相关片段")
                 await asyncio.sleep(0.2)
 
             humanize_for_answer = getattr(rewriter, "humanize_for_answer", None)
             humanized_question = (
-                humanize_for_answer(req.question)
+                humanize_for_answer(contextual_question)
                 if callable(humanize_for_answer)
-                else req.question
+                else contextual_question
             )
             yield _sse_event(
                 "process",
@@ -591,9 +722,8 @@ async def rag_query(req: RAGQuery):
 
             if (
                 all_docs
-                and not cloud_docs
                 and not feishu_docs
-                and not has_relevant_evidence(req.question, all_docs)
+                and not has_relevant_evidence(contextual_question, all_docs)
                 and not has_relevant_evidence(humanized_question, all_docs)
             ):
                 yield _sse_event(

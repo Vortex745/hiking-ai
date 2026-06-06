@@ -59,3 +59,29 @@ def test_rewriter_semantic_with_llm(monkeypatch):
     assert "登山装备" in result[0]  # original always first
     # Semantic variations should differ from template
     assert "登山需要什么装备" in result or "户外徒步装备清单" in result
+
+
+def test_rewriter_contextualizes_follow_up_with_history():
+    """Pronoun-like follow-up questions should become standalone retrieval queries."""
+    from rag.rewriter import QueryRewriter
+
+    rewriter = QueryRewriter(api_key="", base_url="", model="")
+    result = rewriter.contextualize(
+        "如果是雨天，这些装备需要怎么调整？",
+        [{"role": "user", "content": "户外徒步需要准备什么装备"}],
+    )
+
+    assert result == "针对户外徒步需要准备什么装备，如果是雨天，这些装备需要怎么调整？"
+
+
+def test_rewriter_contextualizes_short_follow_up_particle():
+    """Short follow-ups like '装备呢' should keep their prior topic."""
+    from rag.rewriter import QueryRewriter
+
+    rewriter = QueryRewriter(api_key="", base_url="", model="")
+    result = rewriter.contextualize(
+        "装备呢？",
+        [{"role": "user", "content": "户外徒步需要准备什么"}],
+    )
+
+    assert result == "针对户外徒步需要准备什么，装备呢？"

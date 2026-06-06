@@ -85,6 +85,13 @@ func (h *ChatHandler) ChatHistory(c *gin.Context) {
 	proxyRequest(c, http.MethodGet, url, nil)
 }
 
+// ChatClearHistory clears chat history in the AI service.
+func (h *ChatHandler) ChatClearHistory(c *gin.Context) {
+	chatID := c.Param("chatId")
+	url := fmt.Sprintf("%s/api/v1/chat/history/%s", h.aiServiceURL, chatID)
+	proxyRequest(c, http.MethodDelete, url, nil)
+}
+
 // ChatConfirm forwards a high-risk tool confirmation request to the AI service.
 func (h *ChatHandler) ChatConfirm(c *gin.Context) {
 	url := fmt.Sprintf("%s/api/v1/chat/confirm", h.aiServiceURL)

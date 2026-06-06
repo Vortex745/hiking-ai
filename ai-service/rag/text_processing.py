@@ -34,7 +34,7 @@ _DISPLAY_RISK_RE = re.compile(
 _DISPLAY_ROUTE_PREFIX_RE = re.compile(
     r"(?m)(^|\n)(\s*(?:\d+[.)、]\s*)?)"
     r"([\u4e00-\u9fffA-Za-z0-9（）()·]{2,24})"
-    r"(\s*(?:[—–]|-(?!\d))\s*)"
+    r"(\s*(?:[—–]|\s-\s)\s*)"
 )
 _DISPLAY_PLACE_RE = re.compile(
     r"(?<![A-Za-z0-9_*])"
@@ -60,6 +60,8 @@ _STOP_TERMS = {
     "指南",
     "关于",
     "问题",
+    "活动",
+    "带我",
 }
 _CJK_STOP_CHARS = set("的是了在和与及或并就都而很也还把被让对中为到从个吗呢啊")
 

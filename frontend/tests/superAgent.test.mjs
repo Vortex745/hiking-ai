@@ -123,6 +123,24 @@ test('RAG page hydrates persisted server history by stable chat id', () => {
   assert.match(ragSource, /buildRagQueryPayload\(text, null, undefined, chatId\)/)
 })
 
+test('Agent and RAG sessions keep backend chat ids and delete persisted history', () => {
+  assert.match(apiConfigSource, /chatHistoryDelete: \(chatId: string\) => `\$\{API_BASE\}\/chat\/history\/\$\{encodeURIComponent\(chatId\)\}`/)
+  assert.match(apiConfigSource, /ragHistoryDelete: \(chatId: string\) => `\$\{API_BASE\}\/rag\/history\/\$\{encodeURIComponent\(chatId\)\}`/)
+
+  assert.match(source, /interface ChatSession \{[\s\S]*chatId: string/)
+  assert.match(ragSource, /interface ChatSession \{[\s\S]*chatId: string/)
+  assert.match(source, /chatId: chatIdRef\.current/)
+  assert.match(ragSource, /chatId: chatIdRef\.current/)
+
+  assert.match(source, /chatIdRef\.current = session\.chatId/)
+  assert.match(ragSource, /chatIdRef\.current = session\.chatId/)
+  assert.match(source, /localStorage\.setItem\(CHAT_ID_KEY, session\.chatId\)/)
+  assert.match(ragSource, /localStorage\.setItem\(CHAT_ID_KEY, session\.chatId\)/)
+
+  assert.match(source, /fetch\(API\.chatHistoryDelete\(session\.chatId\)/)
+  assert.match(ragSource, /fetch\(API\.ragHistoryDelete\(session\.chatId\)/)
+})
+
 test('RAG page does not expose a document upload action', () => {
   assert.doesNotMatch(ragSource, /fileInputRef/)
   assert.doesNotMatch(ragSource, /handleFileUpload/)
@@ -138,6 +156,17 @@ test('agent requests include browser current location when available', () => {
   assert.match(source, /navigator\.geolocation\.getCurrentPosition/)
   assert.match(source, /await getBrowserLocation\(/)
   assert.match(source, /payload\.current_location = currentLocation/)
+})
+
+test('agent local cache strips precise browser location fields', () => {
+  assert.match(source, /const SENSITIVE_LOCATION_FIELDS = new Set/)
+  assert.match(source, /'latitude'/)
+  assert.match(source, /'longitude'/)
+  assert.match(source, /'accuracy'/)
+  assert.match(source, /function sanitizeStoredValue/)
+  assert.match(source, /function serializeMessages/)
+  assert.match(source, /JSON\.stringify\(sessions\.map\(sanitizeSessionForStorage\)\)/)
+  assert.match(source, /localStorage\.setItem\(STORAGE_KEY, serializeMessages\(/)
 })
 
 test('weather and nearby questions wait longer for browser location authorization', () => {

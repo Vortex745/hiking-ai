@@ -27,6 +27,14 @@ _HUMANIZER_SYSTEM = """你是中文问题改写编辑。把用户问题改成适
 - 不要三段式，不要解释你的改写过程。
 - 只输出改写后的问题。"""
 
+_CONTEXTUALIZE_SYSTEM = """你是 RAG 检索问题改写器。根据对话历史，把用户当前问题改写成一个独立、清晰的检索问题。
+
+规则：
+- 只补全历史中已经出现的指代对象，不添加新事实。
+- 如果当前问题已经独立，保持原问题。
+- 删除客套话，保留徒步领域关键词。
+- 只输出改写后的问题，不要解释。"""
+
 _FALLBACK_TEMPLATES = [
     "{question}的具体信息和注意事项",
     "关于{question}的详细指南",
@@ -71,6 +79,30 @@ class QueryRewriter:
 
         return self._template_rewrite(question)
 
+    def contextualize(self, question: str, history: list[dict] | None = None) -> str:
+        """Turn follow-up questions into standalone retrieval questions."""
+        normalized = " ".join(question.strip().split())
+        if not normalized or not history:
+            return question
+
+        if self.llm is not None:
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+
+                history_text = self._format_history(history)
+                response = self.llm.invoke([
+                    SystemMessage(content=_CONTEXTUALIZE_SYSTEM),
+                    HumanMessage(content=f"对话历史：\n{history_text}\n\n当前问题：{normalized}"),
+                ])
+                content = response.content if hasattr(response, "content") else str(response)
+                content = str(content).strip().strip("\"'")
+                if content:
+                    return content
+            except Exception as e:
+                logger.warning("Contextual query rewrite failed, fallback: %s", e)
+
+        return self._fallback_contextualize(normalized, history)
+
     def _semantic_rewrite(self, question: str) -> list[str]:
         """LLM-powered semantic rewrite."""
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -100,6 +132,31 @@ class QueryRewriter:
         for template in _FALLBACK_TEMPLATES:
             queries.append(template.format(question=question))
         return queries
+
+    def _format_history(self, history: list[dict], limit: int = 6) -> str:
+        lines: list[str] = []
+        for item in history[-limit:]:
+            role = str(item.get("role") or "").strip()
+            content = " ".join(str(item.get("content") or "").split())
+            if role and content:
+                lines.append(f"{role}: {content[:300]}")
+        return "\n".join(lines)
+
+    def _fallback_contextualize(self, question: str, history: list[dict]) -> str:
+        if not any(marker in question for marker in ("这些", "这个", "这类", "它", "他们", "它们", "那", "上述", "上面", "刚才", "呢")):
+            return question
+
+        previous_user = ""
+        for item in reversed(history):
+            if item.get("role") == "user":
+                previous_user = " ".join(str(item.get("content") or "").split())
+                break
+
+        if not previous_user:
+            return question
+        if previous_user in question:
+            return question
+        return f"针对{previous_user}，{question}"
 
     def humanize_for_answer(self, question: str) -> str:
         """Rewrite the generation question with humanizer-zh style guidance."""

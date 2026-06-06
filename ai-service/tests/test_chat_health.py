@@ -116,3 +116,23 @@ def test_chat_sync_missing_openai_key_returns_503(monkeypatch):
 
     assert response.status_code == 503
     assert "OPENAI_API_KEY" in response.json()["detail"]
+
+
+def test_chat_history_delete_clears_persisted_memory(monkeypatch):
+    """Deleting Agent history should clear the server-side chat memory for that chat_id."""
+    from api import chat as chat_api
+
+    calls = []
+
+    class FakeMemory:
+        def clear(self):
+            calls.append("cleared")
+
+    monkeypatch.setattr(chat_api, "_get_memory", lambda chat_id: FakeMemory())
+
+    client = TestClient(app)
+    response = client.delete("/api/v1/chat/history/chat-delete-demo")
+
+    assert response.status_code == 200
+    assert response.json() == {"chat_id": "chat-delete-demo", "status": "cleared"}
+    assert calls == ["cleared"]

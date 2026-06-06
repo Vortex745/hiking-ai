@@ -52,6 +52,17 @@ def test_augmenter_no_llm_bolds_route_metrics_and_risk_terms():
     assert "**不建议**" in result
 
 
+def test_emphasis_does_not_split_hyphenated_gear_terms():
+    """Route-name emphasis should not treat GORE-TEX as a route separator."""
+    from rag.text_processing import emphasize_display_terms
+
+    result = emphasize_display_terms("徒步鞋要有防水功能，比如GORE-TEX内衬，鞋底选Vibram大底。")
+
+    assert "GORE-TEX" in result
+    assert "GORE**-TEX" not in result
+    assert "**防水功能，比如GORE**" not in result
+
+
 def test_augmenter_no_llm_does_not_dump_full_markdown_context():
     """No-LLM fallback should answer with compact points, not source/meta text."""
     from rag.augmenter import ContextAugmenter

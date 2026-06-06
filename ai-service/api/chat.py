@@ -203,6 +203,17 @@ async def chat_history(chat_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@chat_router.delete("/history/{chat_id}")
+async def chat_clear_history(chat_id: str):
+    """Clear persisted chat history for a given chat_id."""
+    try:
+        memory = _get_memory(chat_id)
+        memory.clear()
+        return {"chat_id": chat_id, "status": "cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @chat_router.post("/confirm", response_model=ConfirmResponse)
 async def chat_confirm(req: ConfirmRequest):
     """用户确认或拒绝某条高风险工具调用。"""

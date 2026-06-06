@@ -9,6 +9,7 @@ export const API = {
   chatConfirm: `${API_BASE}/chat/confirm`,
   chatPending: (chatId: string) => `${API_BASE}/chat/pending/${encodeURIComponent(chatId)}`,
   chatHistory: (chatId: string) => `${API_BASE}/chat/history/${encodeURIComponent(chatId)}`,
+  chatHistoryDelete: (chatId: string) => `${API_BASE}/chat/history/${encodeURIComponent(chatId)}`,
 
   modelsFetch: `${API_BASE}/models/fetch`,
 
@@ -17,4 +18,5 @@ export const API = {
   ragHealth: `${API_BASE}/rag/health`,
   ragDocuments: `${API_BASE}/rag/documents`,
   ragHistory: (chatId: string) => `${API_BASE}/rag/history/${encodeURIComponent(chatId)}`,
+  ragHistoryDelete: (chatId: string) => `${API_BASE}/rag/history/${encodeURIComponent(chatId)}`,
 } as const

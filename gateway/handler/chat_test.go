@@ -179,6 +179,39 @@ func TestChatHistoryProxiesToAIService(t *testing.T) {
 	}
 }
 
+func TestChatClearHistoryProxiesDeleteToAIService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aiService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/api/v1/chat/history/chat-123"
+		if r.URL.Path != expectedPath {
+			t.Errorf("expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"chat_id":"chat-123","status":"cleared"}`))
+	}))
+	defer aiService.Close()
+
+	router := gin.New()
+	handler := NewChatHandler(aiService.URL)
+	router.DELETE("/api/v1/chat/history/:chatId", handler.ChatClearHistory)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/chat/history/chat-123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "cleared") {
+		t.Errorf("expected response to contain cleared, got: %s", rec.Body.String())
+	}
+}
+
 func TestChatConfirmProxiesToAIService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

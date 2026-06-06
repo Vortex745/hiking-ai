@@ -21,6 +21,7 @@ interface Message {
 
 interface ChatSession {
   id: string
+  chatId: string
   title: string
   date: string
   messages: Message[]
@@ -70,7 +71,15 @@ function sourceLabel(source: string) {
 function loadSessions(): ChatSession[] {
   try {
     const saved = localStorage.getItem(SESSIONS_KEY)
-    return saved ? JSON.parse(saved) : []
+    const parsed = saved ? JSON.parse(saved) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((session: Partial<ChatSession>) => ({
+      id: session.id || generateId(),
+      chatId: session.chatId || createChatId(),
+      title: session.title || '新对话',
+      date: session.date || getTodayDate(),
+      messages: Array.isArray(session.messages) ? session.messages : [],
+    }))
   } catch { return [] }
 }
 
@@ -208,9 +217,9 @@ function HikingRAG() {
     setSessions(prev => {
       const existing = prev.find(s => s.id === activeSessionId)
       if (existing) {
-        return prev.map(s => s.id === activeSessionId ? { ...s, title, date: getTodayDate(), messages } : s)
+        return prev.map(s => s.id === activeSessionId ? { ...s, chatId: chatIdRef.current, title, date: getTodayDate(), messages } : s)
       }
-      return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...prev].slice(0, 50)
+      return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...prev].slice(0, 50)
     })
   }, [activeSessionId, messages])
 
@@ -296,19 +305,22 @@ function HikingRAG() {
       const title = firstUserMsg ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '') : '新对话'
       setSessions(prev => {
         const filtered = prev.filter(s => s.id !== activeSessionId)
-        return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+        return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
       })
     }
     const newId = generateId()
+    const next = createChatId()
     setActiveSessionId(newId)
     setMessages([])
-    const next = createChatId()
     localStorage.setItem(CHAT_ID_KEY, next)
     chatIdRef.current = next
     try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
   }, [messages, activeSessionId])
 
-  const loadSession = useCallback((session: ChatSession) => {
+  const loadSession = useCallback(async (session: ChatSession) => {
+    if (!session.chatId) {
+      session = { ...session, chatId: createChatId() }
+    }
     if (activeSessionId && messages.length > 0) {
       const firstUserMsg = messages.find(m => m.role === 'user')
       const title = firstUserMsg ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '') : '新对话'
@@ -316,18 +328,39 @@ function HikingRAG() {
         const filtered = prev.filter(s => s.id !== activeSessionId)
         const existing = prev.find(s => s.id === activeSessionId)
         if (existing) {
-          return [{ ...existing, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+          return [{ ...existing, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
         }
-        return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+        return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
       })
     }
     setActiveSessionId(session.id)
+    chatIdRef.current = session.chatId
+    localStorage.setItem(CHAT_ID_KEY, session.chatId)
     setMessages(session.messages)
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(session.messages)) } catch { /* ignore */ }
+
+    try {
+      const response = await fetch(API.ragHistory(session.chatId), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      if (!response.ok) return
+      const restored = normalizeServerMessages(await response.json())
+      if (restored.length === 0) return
+      setMessages(restored)
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(restored)) } catch { /* ignore */ }
+      setSessions(prev => prev.map(s => s.id === session.id ? { ...s, chatId: session.chatId, messages: restored } : s))
+    } catch {
+      // Local session remains the fallback.
+    }
   }, [activeSessionId, messages])
 
   const deleteSession = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
+    const session = sessions.find(s => s.id === sessionId)
+    if (session?.chatId) {
+      void fetch(API.ragHistoryDelete(session.chatId), { method: 'DELETE' }).catch(() => undefined)
+    }
     setSessions(prev => prev.filter(s => s.id !== sessionId))
     if (activeSessionId === sessionId) {
       setActiveSessionId(null)
@@ -337,7 +370,7 @@ function HikingRAG() {
       chatIdRef.current = next
       try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
     }
-  }, [activeSessionId])
+  }, [activeSessionId, sessions])
 
   const handleSend = useCallback(async (
     textOverride?: string,

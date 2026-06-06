@@ -88,6 +88,18 @@ def test_rag_health_counts_indexed_documents_not_tmp_files(monkeypatch, tmp_path
     assert "memory" in response.json()
 
 
+def test_rag_guard_distinguishes_noise_domain_and_follow_up():
+    from api.rag import _rag_guard_answer
+
+    assert "徒步活动" in _rag_guard_answer("啊哈带我活动啊都还活动啊", [])
+    assert "徒步知识库范围" in _rag_guard_answer("网络安全是什么", [])
+    assert _rag_guard_answer("徒步安全注意什么", []) is None
+    assert _rag_guard_answer(
+        "装备呢？",
+        [{"role": "user", "content": "户外徒步需要准备什么"}],
+    ) is None
+
+
 def test_rag_retrieves_documents_and_generates_answer(monkeypatch):
     """RAG query should retrieve relevant documents and produce an augmented answer."""
 
@@ -210,7 +222,7 @@ def test_rag_no_documents_returns_friendly_message(monkeypatch):
 
     client = TestClient(app)
 
-    with client.stream("POST", "/api/v1/rag/query", json={"question": "量子物理是什么"}) as response:
+    with client.stream("POST", "/api/v1/rag/query", json={"question": "徒步安全"}) as response:
         body = response.read().decode("utf-8")
 
     assert response.status_code == 200
@@ -287,8 +299,9 @@ def test_rag_query_syncs_cloud_docs_when_configured(monkeypatch):
             seen["added_docs"] = docs
             seen["added_status"] = status
 
-        def similarity_search(self, query, k=2, status_filter=None):
-            return []
+        def hybrid_search(self, queries, k=4, status_filter=None):
+            seen["retrieval_queries"] = queries
+            return [seen["added_docs"][0]]
 
     class FakeCloudLoader:
         def load_and_split(self, api_url):
@@ -297,7 +310,15 @@ def test_rag_query_syncs_cloud_docs_when_configured(monkeypatch):
                 Document(
                     page_content="云知识库：雷雨天气不要进入裸露山脊。",
                     metadata={"source": "cloud_docs", "title": "安全知识库"},
-                )
+                ),
+                Document(
+                    page_content="云知识库：与本问题无关的路线宣传内容。",
+                    metadata={"source": "cloud_docs", "title": "路线宣传"},
+                ),
+                Document(
+                    page_content="云知识库：与本问题无关的 AI 新闻内容。",
+                    metadata={"source": "cloud_docs", "title": "AI 新闻"},
+                ),
             ]
 
     class FakeRewriter:
@@ -333,9 +354,144 @@ def test_rag_query_syncs_cloud_docs_when_configured(monkeypatch):
     assert response.status_code == 200
     assert seen["api_url"] == "http://api.example.com/docs/all"
     assert seen["added_status"] == "cloud_docs"
-    assert seen["augmented_docs"][0].metadata["title"] == "安全知识库"
+    assert [doc.metadata["title"] for doc in seen["augmented_docs"]] == ["安全知识库"]
     assert "已同步云知识库文档" in body
+    assert "获得 3 个文档片段" in body
+    assert '"matched_chunks": 1' in body
     assert "雷雨天气不要进入裸露山脊" in body
+    assert "路线宣传" not in body
+    assert "AI 新闻" not in body
+
+
+def test_rag_query_rejects_unclear_activity_without_retrieval(monkeypatch):
+    from api import rag as rag_api
+
+    seen = {}
+
+    class FakeMemory:
+        def get_messages(self):
+            return []
+
+        def add_message(self, role, content):
+            seen.setdefault("persisted", []).append((role, content))
+
+    class ForbiddenRetriever:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("unclear activity should not start retrieval")
+
+    class ForbiddenCloudLoader:
+        def load_and_split(self, api_url):
+            raise AssertionError("unclear activity should not sync cloud docs")
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(rag_api.settings, "rag_docs_api_url", "http://api.example.com/docs/all")
+    monkeypatch.setattr(rag_api, "get_chat_memory", lambda chat_id: FakeMemory())
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", ForbiddenRetriever)
+    monkeypatch.setattr(rag_api, "CloudDocsLoader", ForbiddenCloudLoader)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        "/api/v1/rag/query",
+        json={"question": "啊哈带我活动啊都还活动啊", "chat_id": "rag-unclear"},
+    ) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert "问题不清晰或超出徒步知识库范围，跳过知识库检索" in body
+    assert "你是想问徒步活动吗" in body
+    assert "已同步云知识库文档" not in body
+    assert "构造上下文并调用 LLM 生成回答" not in body
+    assert seen["persisted"][0] == ("user", "啊哈带我活动啊都还活动啊")
+    assert seen["persisted"][1][0] == "assistant"
+
+
+def test_rag_query_contextualizes_follow_up_before_retrieval(monkeypatch):
+    from api import rag as rag_api
+
+    seen = {}
+    contextual_question = "针对户外徒步需要准备什么装备，装备呢？"
+
+    class FakeMemory:
+        def get_messages(self):
+            return [
+                {"role": "user", "content": "户外徒步需要准备什么装备"},
+                {"role": "assistant", "content": "需要服装、徒步鞋、背包等装备。"},
+            ]
+
+        def add_message(self, role, content):
+            seen.setdefault("persisted", []).append((role, content))
+
+    class FakeRetriever:
+        storage_mode = "memory"
+
+        def hybrid_search(self, queries, k=4, status_filter=None):
+            seen["retrieval_queries"] = queries
+            return [
+                Document(
+                    page_content="徒步装备需要结合路线、天气和天数准备。",
+                    metadata={"source": "upload", "title": "徒步装备指南"},
+                )
+            ]
+
+    class FakeRewriter:
+        def contextualize(self, question, history):
+            seen["contextualize_question"] = question
+            seen["contextualize_history"] = history
+            return contextual_question
+
+        def rewrite(self, question):
+            seen["rewrite_question"] = question
+            return [question]
+
+        def humanize_for_answer(self, question):
+            seen["humanize_question"] = question
+            return question
+
+    class FakeReranker:
+        @property
+        def enabled(self):
+            return False
+
+    class FakeAugmenter:
+        def augment(self, question, docs):
+            seen["augmented_question"] = question
+            seen["augmented_docs"] = docs
+            return "徒步装备需要结合路线、天气和天数准备。"
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(rag_api, "get_chat_memory", lambda chat_id: FakeMemory())
+    monkeypatch.setattr(rag_api, "VectorStoreRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_api, "QueryRewriter", FakeRewriter)
+    monkeypatch.setattr(rag_api, "Reranker", FakeReranker)
+    monkeypatch.setattr(rag_api, "ContextAugmenter", FakeAugmenter)
+    monkeypatch.setattr(rag_api.asyncio, "sleep", no_sleep)
+
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        "/api/v1/rag/query",
+        json={"question": "装备呢？", "chat_id": "rag-context"},
+    ) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert seen["contextualize_history"][0]["content"] == "户外徒步需要准备什么装备"
+    assert seen["rewrite_question"] == contextual_question
+    assert seen["retrieval_queries"] == [contextual_question]
+    assert seen["humanize_question"] == contextual_question
+    assert seen["augmented_question"] == contextual_question
+    assert seen["persisted"][0] == ("user", "装备呢？")
+    assert "结合历史上下文改写当前问题" in body
+    assert contextual_question in body
+    assert "徒步装备需要结合路线" in body
 
 
 def test_rag_query_syncs_feishu_link_before_retrieval(monkeypatch):
@@ -555,7 +711,7 @@ def test_rag_irrelevant_retrieval_is_treated_as_no_match(monkeypatch):
     class FakeAugmenter:
         def augment(self, question, docs):
             seen["docs"] = docs
-            return "我没在知识库里找到和「量子物理是什么」直接相关的文档。"
+            return "我没在知识库里找到和「营地雷击风险怎么处理」直接相关的文档。"
 
     async def no_sleep(*_args, **_kwargs):
         return None
@@ -568,7 +724,7 @@ def test_rag_irrelevant_retrieval_is_treated_as_no_match(monkeypatch):
 
     client = TestClient(app)
 
-    with client.stream("POST", "/api/v1/rag/query", json={"question": "量子物理是什么"}) as response:
+    with client.stream("POST", "/api/v1/rag/query", json={"question": "营地雷击风险怎么处理"}) as response:
         body = response.read().decode("utf-8")
 
     assert response.status_code == 200

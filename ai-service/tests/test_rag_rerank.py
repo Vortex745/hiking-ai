@@ -203,7 +203,7 @@ def test_rag_query_passes_runtime_model_settings(monkeypatch):
         },
     }
 
-    payload["question"] = "runtime doc"
+    payload["question"] = "徒步 runtime doc"
     with client.stream("POST", "/api/v1/rag/query", json=payload) as response:
         body = response.read().decode("utf-8")
 

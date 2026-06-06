@@ -19,6 +19,7 @@ interface Message {
 
 interface ChatSession {
   id: string
+  chatId: string
   title: string
   date: string
   messages: Message[]
@@ -73,6 +74,7 @@ const STORAGE_KEY = 'ai-hiking-agent-chat'
 const SESSIONS_KEY = 'ai-hiking-agent-sessions'
 const CHAT_ID_KEY = 'ai-hiking-agent-chat-id'
 const ACTIVE_SESSION_KEY = 'ai-hiking-agent-active-session'
+const SENSITIVE_LOCATION_FIELDS = new Set(['latitude', 'longitude', 'accuracy'])
 
 function createChatId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -109,6 +111,31 @@ function normalizeServerMessages(payload: unknown): Message[] {
     .filter((item): item is Message => item !== null)
 }
 
+function sanitizeStoredValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeStoredValue)
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !SENSITIVE_LOCATION_FIELDS.has(key))
+        .map(([key, item]) => [key, sanitizeStoredValue(item)]),
+    )
+  }
+  return value
+}
+
+function serializeMessages(messages: Message[]) {
+  return JSON.stringify(sanitizeStoredValue(messages))
+}
+
+function sanitizeSessionForStorage(session: ChatSession): ChatSession {
+  return {
+    ...session,
+    messages: sanitizeStoredValue(session.messages) as Message[],
+  }
+}
+
 function formatConfirmedToolResult(toolResult: Record<string, unknown>) {
   if (toolResult.ok === false) {
     return typeof toolResult.error === 'string' && toolResult.error
@@ -133,12 +160,20 @@ function getTodayDate() {
 function loadSessions(): ChatSession[] {
   try {
     const saved = localStorage.getItem(SESSIONS_KEY)
-    return saved ? JSON.parse(saved) : []
+    const parsed = saved ? JSON.parse(saved) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((session: Partial<ChatSession>) => ({
+      id: session.id || generateId(),
+      chatId: session.chatId || createChatId(),
+      title: session.title || '新对话',
+      date: session.date || getTodayDate(),
+      messages: Array.isArray(session.messages) ? session.messages : [],
+    }))
   } catch { return [] }
 }
 
 function saveSessions(sessions: ChatSession[]) {
-  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)) } catch { /* ignore */ }
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.map(sanitizeSessionForStorage))) } catch { /* ignore */ }
 }
 
 function getBrowserLocation(timeout = 3000): Promise<BrowserLocation | null> {
@@ -235,7 +270,7 @@ function SuperAgent() {
 
   // Persist
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(messages)) } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE_KEY, serializeMessages(messages)) } catch { /* ignore */ }
   }, [messages])
 
   useEffect(() => {
@@ -288,9 +323,9 @@ function SuperAgent() {
     setSessions(prev => {
       const existing = prev.find(s => s.id === activeSessionId)
       if (existing) {
-        return prev.map(s => s.id === activeSessionId ? { ...s, title, date: getTodayDate(), messages } : s)
+        return prev.map(s => s.id === activeSessionId ? { ...s, chatId: chatIdRef.current, title, date: getTodayDate(), messages } : s)
       }
-      return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...prev].slice(0, 50)
+      return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...prev].slice(0, 50)
     })
   }, [activeSessionId, messages])
 
@@ -477,19 +512,22 @@ function SuperAgent() {
       const title = firstUserMsg ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '') : '新对话'
       setSessions(prev => {
         const filtered = prev.filter(s => s.id !== activeSessionId)
-        return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+        return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
       })
     }
     const newId = generateId()
+    const next = createChatId()
     setActiveSessionId(newId)
     setMessages([])
-    const next = createChatId()
     localStorage.setItem(CHAT_ID_KEY, next)
     chatIdRef.current = next
     try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
   }, [messages, activeSessionId])
 
-  const loadSession = useCallback((session: ChatSession) => {
+  const loadSession = useCallback(async (session: ChatSession) => {
+    if (!session.chatId) {
+      session = { ...session, chatId: createChatId() }
+    }
     if (activeSessionId && messages.length > 0) {
       const firstUserMsg = messages.find(m => m.role === 'user')
       const title = firstUserMsg ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '') : '新对话'
@@ -497,18 +535,39 @@ function SuperAgent() {
         const filtered = prev.filter(s => s.id !== activeSessionId)
         const existing = prev.find(s => s.id === activeSessionId)
         if (existing) {
-          return [{ ...existing, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+          return [{ ...existing, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
         }
-        return [{ id: activeSessionId, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
+        return [{ id: activeSessionId, chatId: chatIdRef.current, title, date: getTodayDate(), messages }, ...filtered].slice(0, 50)
       })
     }
     setActiveSessionId(session.id)
+    chatIdRef.current = session.chatId
+    localStorage.setItem(CHAT_ID_KEY, session.chatId)
     setMessages(session.messages)
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(session.messages)) } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE_KEY, serializeMessages(session.messages)) } catch { /* ignore */ }
+
+    try {
+      const response = await fetch(API.chatHistory(session.chatId), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      if (!response.ok) return
+      const restored = normalizeServerMessages(await response.json())
+      if (restored.length === 0) return
+      setMessages(restored)
+      try { localStorage.setItem(STORAGE_KEY, serializeMessages(restored)) } catch { /* ignore */ }
+      setSessions(prev => prev.map(s => s.id === session.id ? { ...s, chatId: session.chatId, messages: restored } : s))
+    } catch {
+      // Local session remains the fallback.
+    }
   }, [activeSessionId, messages])
 
   const deleteSession = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
+    const session = sessions.find(s => s.id === sessionId)
+    if (session?.chatId) {
+      void fetch(API.chatHistoryDelete(session.chatId), { method: 'DELETE' }).catch(() => undefined)
+    }
     setSessions(prev => prev.filter(s => s.id !== sessionId))
     if (activeSessionId === sessionId) {
       setActiveSessionId(null)
@@ -518,7 +577,7 @@ function SuperAgent() {
       chatIdRef.current = next
       try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
     }
-  }, [activeSessionId])
+  }, [activeSessionId, sessions])
 
   const handleSend = useCallback(async (
     textOverride?: string,
@@ -628,8 +687,10 @@ function SuperAgent() {
   }
 
   const handleClear = () => {
+    const currentChatId = chatIdRef.current
     setMessages([])
     try {
+      void fetch(API.chatHistoryDelete(currentChatId), { method: 'DELETE' }).catch(() => undefined)
       localStorage.removeItem(STORAGE_KEY)
       const next = createChatId()
       localStorage.setItem(CHAT_ID_KEY, next)
