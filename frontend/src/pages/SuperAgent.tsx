@@ -75,6 +75,7 @@ const SESSIONS_KEY = 'ai-hiking-agent-sessions'
 const CHAT_ID_KEY = 'ai-hiking-agent-chat-id'
 const ACTIVE_SESSION_KEY = 'ai-hiking-agent-active-session'
 const SENSITIVE_LOCATION_FIELDS = new Set(['latitude', 'longitude', 'accuracy'])
+const USER_CANCELLED_MESSAGE = '用户主动取消回答，请补充内容或点击重试。'
 
 function createChatId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -358,6 +359,26 @@ function SuperAgent() {
       const last = updated[updated.length - 1]
       if (last && last.role === 'assistant') {
         updated[updated.length - 1] = { ...last, content: last.content + text, isStreaming: true }
+      }
+      return updated
+    })
+  }, [])
+
+  const appendCancellationNotice = useCallback(() => {
+    setMessages(prev => {
+      const updated = [...prev]
+      const last = updated[updated.length - 1]
+      if (last && last.role === 'assistant') {
+        if (last.content.includes(USER_CANCELLED_MESSAGE)) {
+          updated[updated.length - 1] = { ...last, isStreaming: false }
+          return updated
+        }
+        const separator = last.content.trim() ? '\n\n' : ''
+        updated[updated.length - 1] = {
+          ...last,
+          content: `${last.content}${separator}${USER_CANCELLED_MESSAGE}`,
+          isStreaming: false,
+        }
       }
       return updated
     })
@@ -723,8 +744,8 @@ function SuperAgent() {
         cleanupRef.current();
         cleanupRef.current = null;
       }
-      textStream.reset();
-      finalizeStreaming();
+      textStream.flushNow();
+      appendCancellationNotice();
       setIsSending(false)
     }
   });

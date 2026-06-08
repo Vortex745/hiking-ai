@@ -15,13 +15,34 @@ from api.models import (
     PendingConfirmationsResponse,
 )
 from api.confirmation_store import get_store
-from agent.agent import AIAgent, AVAILABLE_TOOLS, tool_registry
+from agent.tool_names import OPENMANUS_TOOL_NAMES
 from memory.base import ChatMemory
 from memory.factory import chat_memory_status, get_chat_memory
 from config import settings
 
 logger = logging.getLogger("ai-service.chat")
 chat_router = APIRouter(prefix="/chat")
+
+AIAgent = None
+tool_registry = None
+
+
+def _get_agent_class():
+    global AIAgent
+    if AIAgent is None:
+        from agent.agent import AIAgent as loaded_agent
+
+        AIAgent = loaded_agent
+    return AIAgent
+
+
+def _get_tool_registry():
+    global tool_registry
+    if tool_registry is None:
+        from agent.agent import tool_registry as loaded_registry
+
+        tool_registry = loaded_registry
+    return tool_registry
 
 
 def _missing_llm_config_message() -> str:
@@ -81,7 +102,8 @@ async def chat_sync(req: ChatRequest):
         history = memory.get_messages()
         memory.add_message("user", req.message)
 
-        agent = AIAgent(llm_config=_request_llm_config(req))
+        agent_cls = _get_agent_class()
+        agent = agent_cls(llm_config=_request_llm_config(req))
         kwargs = {}
         if req.scenario:
             kwargs["scenario"] = req.scenario
@@ -102,36 +124,14 @@ async def chat_sync(req: ChatRequest):
 
 @chat_router.get("/health")
 async def chat_health():
-    try:
-        if not settings.openai_api_key:
-            return {
-                "status": "unconfigured",
-                "module": "agent",
-                "service": "ai-service",
-                "tools": len(AVAILABLE_TOOLS),
-                "memory": chat_memory_status(),
-            }
-        agent = AIAgent()
-        return {
-            "status": "ok",
-            "module": "agent",
-            "service": "ai-service",
-            "tools": len(AVAILABLE_TOOLS),
-            "memory": chat_memory_status(),
-        }
-    except Exception as e:
-        err_str = str(e).lower()
-        if "api_key" in err_str or "api key" in err_str or "openai_api_key" in err_str:
-            return {
-                "status": "unconfigured",
-                "module": "agent",
-                "service": "ai-service",
-                "tools": len(AVAILABLE_TOOLS),
-                "memory": chat_memory_status(),
-                "detail": str(e),
-            }
-        logger.exception("Agent health check failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    status = "ok" if settings.openai_api_key else "unconfigured"
+    return {
+        "status": status,
+        "module": "agent",
+        "service": "ai-service",
+        "tools": len(OPENMANUS_TOOL_NAMES),
+        "memory": chat_memory_status(),
+    }
 
 
 @chat_router.post("/sse")
@@ -152,7 +152,8 @@ async def chat_sse(req: ChatRequest):
                 yield f"data: {json.dumps({'type': 'done', 'content': ''}, ensure_ascii=False)}\n\n"
                 return
 
-            agent = AIAgent(llm_config=_request_llm_config(req))
+            agent_cls = _get_agent_class()
+            agent = agent_cls(llm_config=_request_llm_config(req))
             kwargs = {}
             if req.scenario:
                 kwargs["scenario"] = req.scenario
@@ -237,7 +238,8 @@ async def chat_confirm(req: ConfirmRequest):
 
     if action == "confirm":
         store.confirm(req.confirmation_id)
-        tool_result = await tool_registry.execute_tool(rec.tool_name, rec.args)
+        registry = _get_tool_registry()
+        tool_result = await registry.execute_tool(rec.tool_name, rec.args)
         return ConfirmResponse(
             status="confirmed",
             confirmation_id=req.confirmation_id,

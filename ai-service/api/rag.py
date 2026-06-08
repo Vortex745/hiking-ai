@@ -14,22 +14,120 @@ from api.models import (
     RAGDocument,
     RuntimeModelSettings,
 )
-from rag.loader import DocumentLoader
-from rag.retriever import VectorStoreRetriever
-from rag.cloud_docs import CloudDocsLoader
 from config import settings
 from memory.factory import chat_memory_status, get_chat_memory
-from rag.rewriter import QueryRewriter
-from rag.augmenter import ContextAugmenter, has_relevant_evidence
-from rag.feishu import FeishuDefaultSyncer, FeishuDocLoader, find_feishu_links
-from rag.reranker import Reranker
-from rag.text_processing import clean_display_text
 from runtime_paths import runtime_dir
 
 logger = logging.getLogger("ai-service.rag")
 rag_router = APIRouter(prefix="/rag")
 
 RAG_DOCS_DIR = runtime_dir("RAG_DOCS_DIR", "rag_docs")
+
+DocumentLoader = None
+VectorStoreRetriever = None
+CloudDocsLoader = None
+QueryRewriter = None
+ContextAugmenter = None
+Reranker = None
+FeishuDefaultSyncer = None
+FeishuDocLoader = None
+find_feishu_links = None
+has_relevant_evidence = None
+clean_display_text = None
+
+
+def _get_document_loader_class():
+    global DocumentLoader
+    if DocumentLoader is None:
+        from rag.loader import DocumentLoader as loaded
+
+        DocumentLoader = loaded
+    return DocumentLoader
+
+
+def _get_vector_store_retriever_class():
+    global VectorStoreRetriever
+    if VectorStoreRetriever is None:
+        from rag.retriever import VectorStoreRetriever as loaded
+
+        VectorStoreRetriever = loaded
+    return VectorStoreRetriever
+
+
+def _get_cloud_docs_loader_class():
+    global CloudDocsLoader
+    if CloudDocsLoader is None:
+        from rag.cloud_docs import CloudDocsLoader as loaded
+
+        CloudDocsLoader = loaded
+    return CloudDocsLoader
+
+
+def _get_query_rewriter_class():
+    global QueryRewriter
+    if QueryRewriter is None:
+        from rag.rewriter import QueryRewriter as loaded
+
+        QueryRewriter = loaded
+    return QueryRewriter
+
+
+def _get_context_augmenter_class():
+    global ContextAugmenter
+    if ContextAugmenter is None:
+        from rag.augmenter import ContextAugmenter as loaded
+
+        ContextAugmenter = loaded
+    return ContextAugmenter
+
+
+def _get_reranker_class():
+    global Reranker
+    if Reranker is None:
+        from rag.reranker import Reranker as loaded
+
+        Reranker = loaded
+    return Reranker
+
+
+def _get_feishu_classes():
+    global FeishuDefaultSyncer, FeishuDocLoader
+    if FeishuDefaultSyncer is None:
+        from rag.feishu import FeishuDefaultSyncer as loaded_syncer
+
+        FeishuDefaultSyncer = loaded_syncer
+    if FeishuDocLoader is None:
+        from rag.feishu import FeishuDocLoader as loaded_loader
+
+        FeishuDocLoader = loaded_loader
+    return FeishuDefaultSyncer, FeishuDocLoader
+
+
+def _find_feishu_links(text: str):
+    global find_feishu_links
+    if find_feishu_links is None:
+        from rag.feishu import find_feishu_links as loaded
+
+        find_feishu_links = loaded
+    return find_feishu_links(text)
+
+
+def _has_relevant_evidence(question: str, docs: list) -> bool:
+    global has_relevant_evidence
+    if has_relevant_evidence is None:
+        from rag.augmenter import has_relevant_evidence as loaded
+
+        has_relevant_evidence = loaded
+    return has_relevant_evidence(question, docs)
+
+
+def _clean_display_text(text: str) -> str:
+    global clean_display_text
+    if clean_display_text is None:
+        from rag.text_processing import clean_display_text as loaded
+
+        clean_display_text = loaded
+    return clean_display_text(text)
 
 
 DIRECT_ANSWER_PATTERNS = {
@@ -115,7 +213,7 @@ def _has_hiking_intent(question: str) -> bool:
 
 def _rag_guard_answer(question: str, history: list[dict]) -> str | None:
     """Return a direct guard answer when a query should not enter retrieval."""
-    if find_feishu_links(question):
+    if _find_feishu_links(question):
         return None
 
     compact = _compact_question_text(question)
@@ -212,7 +310,7 @@ def _recent_rag_history(memory, limit: int = 6) -> list[dict]:
 
 
 def _preview_text(text: str, limit: int = 260) -> str:
-    normalized = clean_display_text(text)
+    normalized = _clean_display_text(text)
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[:limit].rstrip()}..."
@@ -323,12 +421,13 @@ def _summarize_feishu_sync(summaries: list[dict]) -> dict:
 
 
 def _sync_feishu_links(question: str, retriever: VectorStoreRetriever) -> tuple[list, list[dict]]:
-    links = find_feishu_links(question)
+    links = _find_feishu_links(question)
     if not links:
         return [], []
 
-    loader = FeishuDocLoader()
-    syncer = FeishuDefaultSyncer(loader, retriever)
+    syncer_cls, loader_cls = _get_feishu_classes()
+    loader = loader_cls()
+    syncer = syncer_cls(loader, retriever)
     summaries: list[dict] = []
     synced_docs = []
 
@@ -352,8 +451,9 @@ def _sync_feishu_links(question: str, retriever: VectorStoreRetriever) -> tuple[
 
 
 def _sync_default_feishu_knowledge(retriever: VectorStoreRetriever) -> tuple[list, list[dict]]:
-    loader = FeishuDocLoader()
-    syncer = FeishuDefaultSyncer(loader, retriever)
+    syncer_cls, loader_cls = _get_feishu_classes()
+    loader = loader_cls()
+    syncer = syncer_cls(loader, retriever)
     summaries: list[dict] = []
 
     if settings.feishu_default_space_id:
@@ -372,7 +472,8 @@ async def rag_health():
         if not os.access(RAG_DOCS_DIR, os.W_OK):
             raise RuntimeError("RAG documents directory is not writable")
 
-        retriever = VectorStoreRetriever()
+        retriever_cls = _get_vector_store_retriever_class()
+        retriever = retriever_cls()
         document_count = retriever.document_count()
         return {
             "status": "ok",
@@ -403,11 +504,13 @@ async def rag_upload(
         with open(file_path, "wb") as f:
             f.write(content)
 
-        loader = DocumentLoader()
+        loader_cls = _get_document_loader_class()
+        loader = loader_cls()
         docs = loader.load_and_split(str(file_path))
 
         runtime_settings = _parse_runtime_model_settings(model_settings)
-        retriever = VectorStoreRetriever(**_runtime_embedding_kwargs_from_settings(runtime_settings))
+        retriever_cls = _get_vector_store_retriever_class()
+        retriever = retriever_cls(**_runtime_embedding_kwargs_from_settings(runtime_settings))
         indexing_result = retriever.add_documents(docs, status)
         if (
             indexing_result is not None
@@ -471,10 +574,12 @@ async def rag_query(req: RAGQuery):
 
             embedding_kwargs = _runtime_embedding_kwargs_from_settings(req.model_settings)
             try:
-                retriever = VectorStoreRetriever(**embedding_kwargs)
+                retriever_cls = _get_vector_store_retriever_class()
+                retriever = retriever_cls(**embedding_kwargs)
             except Exception as e:
                 logger.warning("自定义 Embedding 配置不可用，降级到默认配置: %s", e)
-                retriever = VectorStoreRetriever()
+                retriever_cls = _get_vector_store_retriever_class()
+                retriever = retriever_cls()
                 yield _sse_event(
                     "process",
                     f"自定义 Embedding 配置连接失败，已降级使用默认配置",
@@ -486,7 +591,8 @@ async def rag_query(req: RAGQuery):
                 yield _sse_event("process", "从云知识库 API 同步文档")
                 await asyncio.sleep(0.2)
                 try:
-                    cloud_loader = CloudDocsLoader()
+                    cloud_loader_cls = _get_cloud_docs_loader_class()
+                    cloud_loader = cloud_loader_cls()
                     loaded = cloud_loader.load_and_split(settings.rag_docs_api_url)
                     if loaded:
                         retriever.add_documents(loaded, status="cloud_docs")
@@ -514,7 +620,7 @@ async def rag_query(req: RAGQuery):
                 await asyncio.sleep(0.2)
 
             feishu_docs: list = []
-            feishu_links = find_feishu_links(req.question)
+            feishu_links = _find_feishu_links(req.question)
             if feishu_links and not settings.feishu_enabled:
                 yield _sse_event(
                     "process",
@@ -576,17 +682,22 @@ async def rag_query(req: RAGQuery):
                 await asyncio.sleep(0.2)
 
             llm_kwargs = _runtime_llm_kwargs_from_settings(req.model_settings)
-            rewriter = QueryRewriter(**llm_kwargs)
+            rewriter_cls = _get_query_rewriter_class()
+            rewriter = rewriter_cls(**llm_kwargs)
             try:
-                augmenter = ContextAugmenter(**llm_kwargs)
+                augmenter_cls = _get_context_augmenter_class()
+                augmenter = augmenter_cls(**llm_kwargs)
             except Exception as e:
                 logger.warning("自定义 LLM 配置不可用，降级到默认配置: %s", e)
-                augmenter = ContextAugmenter()
+                augmenter_cls = _get_context_augmenter_class()
+                augmenter = augmenter_cls()
             rerank_kwargs = _runtime_rerank_kwargs_from_settings(req.model_settings)
             try:
-                reranker = Reranker(**rerank_kwargs)
+                reranker_cls = _get_reranker_class()
+                reranker = reranker_cls(**rerank_kwargs)
             except Exception:
-                reranker = Reranker()
+                reranker_cls = _get_reranker_class()
+                reranker = reranker_cls()
 
             contextualize = getattr(rewriter, "contextualize", None)
             contextual_question = (
@@ -647,7 +758,8 @@ async def rag_query(req: RAGQuery):
                 )
                 await asyncio.sleep(0.2)
                 try:
-                    retriever = VectorStoreRetriever()
+                    retriever_cls = _get_vector_store_retriever_class()
+                    retriever = retriever_cls()
                     hybrid_search = getattr(retriever, "hybrid_search", None)
                     if callable(hybrid_search):
                         all_docs = hybrid_search(queries, k=4, status_filter=req.status)
@@ -668,7 +780,8 @@ async def rag_query(req: RAGQuery):
                 )
                 await asyncio.sleep(0.2)
                 try:
-                    retriever = VectorStoreRetriever()
+                    retriever_cls = _get_vector_store_retriever_class()
+                    retriever = retriever_cls()
                     hybrid_search = getattr(retriever, "hybrid_search", None)
                     if callable(hybrid_search):
                         all_docs = hybrid_search(queries, k=4, status_filter=req.status)
@@ -723,8 +836,8 @@ async def rag_query(req: RAGQuery):
             if (
                 all_docs
                 and not feishu_docs
-                and not has_relevant_evidence(contextual_question, all_docs)
-                and not has_relevant_evidence(humanized_question, all_docs)
+                and not _has_relevant_evidence(contextual_question, all_docs)
+                and not _has_relevant_evidence(humanized_question, all_docs)
             ):
                 yield _sse_event(
                     "process",
@@ -782,7 +895,8 @@ async def rag_query(req: RAGQuery):
 @rag_router.get("/documents")
 async def rag_documents():
     """List all uploaded documents."""
-    retriever = VectorStoreRetriever()
+    retriever_cls = _get_vector_store_retriever_class()
+    retriever = retriever_cls()
     docs = _indexed_document_refs(retriever)
     if not docs:
         for fpath in RAG_DOCS_DIR.iterdir():

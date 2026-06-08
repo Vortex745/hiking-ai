@@ -1,10 +1,30 @@
 from fastapi import APIRouter
 
-from agent.agent import AIAgent, validate_tool_configuration
 from config import settings
 from mcp.runtime import get_mcp_runtime
 
 tools_router = APIRouter(prefix="/tools")
+
+AIAgent = None
+validate_tool_configuration = None
+
+
+def _get_agent_class():
+    global AIAgent
+    if AIAgent is None:
+        from agent.agent import AIAgent as loaded_agent
+
+        AIAgent = loaded_agent
+    return AIAgent
+
+
+def _validate_tool_configuration():
+    global validate_tool_configuration
+    if validate_tool_configuration is None:
+        from agent.agent import validate_tool_configuration as loaded_validator
+
+        validate_tool_configuration = loaded_validator
+    return validate_tool_configuration()
 
 
 def _mcp_configured() -> bool:
@@ -21,7 +41,8 @@ def _external_keys_status() -> dict[str, bool]:
 
 @tools_router.get("")
 async def list_tools(include_hidden: bool = False):
-    registry = AIAgent.get_tool_registry()
+    agent_cls = _get_agent_class()
+    registry = agent_cls.get_tool_registry()
     tools = registry.tools_api_response(include_hidden=include_hidden)
     return {
         "count": len(tools),
@@ -32,7 +53,8 @@ async def list_tools(include_hidden: bool = False):
 
 @tools_router.get("/health")
 async def tools_health():
-    registry = AIAgent.get_tool_registry()
+    agent_cls = _get_agent_class()
+    registry = agent_cls.get_tool_registry()
     visible = registry.list_tools(include_hidden=False)
     all_tools = registry.list_all_tools()
     configured = _mcp_configured()
@@ -42,7 +64,7 @@ async def tools_health():
         "tools_total": len(all_tools),
         "visible_tools": len(visible),
         "hidden_tools": len(all_tools) - len(visible),
-        "configuration": validate_tool_configuration(),
+        "configuration": _validate_tool_configuration(),
         "mcp": {
             "configured": configured,
             "loaded": runtime_health["loaded"],

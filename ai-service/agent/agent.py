@@ -15,6 +15,7 @@ from agent.prompts import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from agent.react_guard import RepeatCallDetector, StuckDetector
 from agent.runtime import AgentRunRecord, AgentState, ExecutionLane, ExitReason
 from agent.task_exit import AgentTaskExitController
+from agent.tool_names import OPENMANUS_TOOL_NAMES
 from api.models import RuntimeLlmConfig
 from config import settings
 from memory import MemoryManager
@@ -60,21 +61,6 @@ AFFIRMATIVE_ROUTE_FOLLOWUP = (
     "继续",
 )
 
-
-OPENMANUS_TOOL_NAMES = [
-    "web_search",
-    "web_scraping",
-    "file_operation",
-    "resource_download",
-    "terminal",
-    "generate_pdf",
-    "route_research",
-    "hiking_knowledge_search",
-    "gear_checklist",
-    "risk_assessment",
-    "trip_report_export",
-    "terminate",
-]
 
 AVAILABLE_TOOL_MAP = {
     "web_search": web_search,

@@ -22,15 +22,15 @@ def test_chat_health_unconfigured(monkeypatch):
     assert data["service"] == "ai-service"
 
 
-def test_chat_health_agent_raises_key_error(monkeypatch):
-    """If agent initialization raises an error indicating missing api key, report as unconfigured gracefully."""
+def test_chat_health_does_not_initialize_agent(monkeypatch):
+    """Health should not initialize the full Agent cold path."""
     monkeypatch.setattr(settings, "openai_api_key", "dummy-key")
 
     from api import chat as chat_api
 
     class BrokenAIAgent:
         def __init__(self, *args, **kwargs):
-            raise ValueError("The api_key client option must be set")
+            raise AssertionError("chat health should not initialize AIAgent")
 
     monkeypatch.setattr(chat_api, "AIAgent", BrokenAIAgent)
 
@@ -38,8 +38,9 @@ def test_chat_health_agent_raises_key_error(monkeypatch):
     response = client.get("/api/v1/chat/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "unconfigured"
-    assert "api_key" in data["detail"]
+    assert data["status"] == "ok"
+    assert data["module"] == "agent"
+    assert data["tools"] == 12
 
 
 def test_chat_sse_missing_openai_key_returns_stream_error(monkeypatch):

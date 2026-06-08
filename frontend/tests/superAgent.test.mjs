@@ -228,6 +228,16 @@ test('Agent and RAG stream text through the client-side typewriter queue', () =>
   assert.match(ragSource, /textStream\.finishWhenIdle\(finishStreaming\)/)
 })
 
+test('Agent and RAG cancellation shows an actionable user-cancelled notice', () => {
+  const notice = '用户主动取消回答，请补充内容或点击重试。'
+  assert.ok(source.includes(`const USER_CANCELLED_MESSAGE = '${notice}'`))
+  assert.ok(ragSource.includes(`const USER_CANCELLED_MESSAGE = '${notice}'`))
+  assert.match(source, /const appendCancellationNotice = useCallback/)
+  assert.match(ragSource, /const appendCancellationNotice = useCallback/)
+  assert.match(source, /textStream\.flushNow\(\);\s*appendCancellationNotice\(\);\s*setIsSending\(false\)/)
+  assert.match(ragSource, /textStream\.flushNow\(\);\s*appendCancellationNotice\(\);\s*setIsSending\(false\);/)
+})
+
 test('Agent and RAG messages render markdown emphasis as bold text', () => {
   assert.ok(geminiThreadSource.includes('const MARKDOWN_PATTERN'))
   assert.ok(geminiThreadSource.includes('raw.split(MARKDOWN_PATTERN)'))

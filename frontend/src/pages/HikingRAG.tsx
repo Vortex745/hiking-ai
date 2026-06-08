@@ -31,6 +31,7 @@ const STORAGE_KEY = 'ai-hiking-rag-chat'
 const SESSIONS_KEY = 'ai-hiking-rag-sessions'
 const CHAT_ID_KEY = 'ai-hiking-rag-chat-id'
 const ACTIVE_SESSION_KEY = 'ai-hiking-rag-active-session'
+const USER_CANCELLED_MESSAGE = '用户主动取消回答，请补充内容或点击重试。'
 
 function createChatId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -263,6 +264,20 @@ function HikingRAG() {
     updateLastAssistant(last => ({ ...last, content: last.content + text, isStreaming: true }))
   }, [updateLastAssistant])
 
+  const appendCancellationNotice = useCallback(() => {
+    updateLastAssistant(last => {
+      if (last.content.includes(USER_CANCELLED_MESSAGE)) {
+        return { ...last, isStreaming: false }
+      }
+      const separator = last.content.trim() ? '\n\n' : ''
+      return {
+        ...last,
+        content: `${last.content}${separator}${USER_CANCELLED_MESSAGE}`,
+        isStreaming: false,
+      }
+    })
+  }, [updateLastAssistant])
+
   const textStream = useMemo(
     () => createTypewriterStreamQueue(appendToLastMessage, { chunkSize: 3, intervalMs: 14 }),
     [appendToLastMessage],
@@ -468,8 +483,8 @@ function HikingRAG() {
         cleanupRef.current();
         cleanupRef.current = null;
       }
-      textStream.reset();
-      finalizeStreaming();
+      textStream.flushNow();
+      appendCancellationNotice();
       setIsSending(false);
     }
   });
